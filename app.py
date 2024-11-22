@@ -1,50 +1,95 @@
 import streamlit as st
-from dotenv import load_dotenv
-from PyPDF2 import PdfReader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from document_processor import DocumentProcessor
+from embedding_manager import EmbeddingManager
+from model_manager import ModelManager
 
-def get_pdf_text(pdf_docs):
-    text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
-    return text
+def initialize_session_state():
+    if 'doc_processor' not in st.session_state:
+        st.session_state.doc_processor = DocumentProcessor()
+    if 'embedding_manager' not in st.session_state:
+        st.session_state.embedding_manager = EmbeddingManager()
+    if 'model_manager' not in st.session_state:
+        st.session_state.model_manager = ModelManager()
+    if 'uploaded_files_processed' not in st.session_state:
+        st.session_state.uploaded_files_processed = set()
+    if 'qa_history' not in st.session_state:
+        st.session_state.qa_history = []  # Lista do przechowywania historii pytań i odpowiedzi
 
-def get_text_chunks(text):
-    text_splitter = CharacterTextSplitter(
-        separator="\n",
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len
-    )
-    chunks = text_splitter.split_text(text)
-    return chunks   
-
-def get_vectorstore(text_chunks):
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
-    return vectorstore
+def process_files(files):
+    if files is not None:
+        for pdf_file in files:
+            if pdf_file.name not in st.session_state.uploaded_files_processed:
+                with st.spinner(f"Przetwarzanie {pdf_file.name}..."):
+                    text = st.session_state.doc_processor.extract_text_from_pdf(pdf_file)
+                    chunks = st.session_state.doc_processor.chunk_text(text)
+                    st.session_state.embedding_manager.create_embeddings(chunks)
+                    st.session_state.uploaded_files_processed.add(pdf_file.name)
+                st.success(f"Przetworzono {pdf_file.name}")
 
 def main():
-    load_dotenv()
-    st.set_page_config(page_title="Chatbot", page_icon=":robot_face:")
-    
-    st.header("Chatbot :books:")
-    st.text_input("Enter your message:")
+    st.title("System Odpowiadania na Pytania z PDF 📄🤖")
 
-    st.sidebar.subheader("Your documents")
-    pdf_docs = st.sidebar.file_uploader("Upload your PDF's here", accept_multiple_files=True)
-    if st.sidebar.button("Process"):
-        with st.spinner("Processing"):
-            # get pdf text
-            raw_text = get_pdf_text(pdf_docs)
-            # get the text chunks
-            text_chunks = get_text_chunks(raw_text)
-            # create vector store
-            vectorstore = get_vectorstore(text_chunks)
+    initialize_session_state()
+
+    # Uploader plików
+    uploaded_files = st.file_uploader(
+        "Prześlij pliki PDF", 
+        type=['pdf'],
+        accept_multiple_files=True
+    )
+
+    # Przetwarzanie plików po ich przesłaniu
+    if uploaded_files:
+        process_files(uploaded_files)
+
+    # Przycisk czyszczenia
+    if st.button("Wyczyść Wszystko"):
+        st.session_state.embedding_manager.clear()
+        st.session_state.uploaded_files_processed.clear()
+        st.session_state.qa_history.clear()
+        st.success("Wyczyszczono wszystkie dokumenty i historię pytań!")
+
+    # Wprowadzanie pytania
+    question = st.text_input("💬 Zadaj pytanie dotyczące Twoich dokumentów:")
+
+    if question:
+        if len(st.session_state.embedding_manager.texts) == 0:
+            st.warning("Najpierw prześlij pliki PDF!")
+            return
+
+        with st.spinner("Generowanie odpowiedzi..."):
+            try:
+                # Szukanie kontekstu
+                context = st.session_state.embedding_manager.search(question, k=4)
+                if context and isinstance(context, list):
+                    combined_context = "\n\n".join(context)
+                    answer = st.session_state.model_manager.generate_answer(question, [combined_context])
+                else:
+                    answer = "Nie znaleziono odpowiedniego kontekstu."
+
+                # Dodanie pytania i odpowiedzi do historii
+                st.session_state.qa_history.append((question, answer))
+
+                # Wyświetlenie całej historii pytań i odpowiedzi
+                for idx, (q, a) in enumerate(st.session_state.qa_history):
+                    st.write(f"### 🧐 Pytanie {idx+1}:")
+                    st.write(q)
+                    st.write(f"### 💡 Odpowiedź {idx+1}:")
+                    st.write(a)
+                    st.write("---")  # Separator
+
+            except Exception as e:
+                st.error(f"Wystąpił błąd: {str(e)}")
+
+    else:
+        # Wyświetlenie historii, jeśli istnieje, nawet gdy nie zadano nowego pytania
+        if st.session_state.qa_history:
+            for idx, (q, a) in enumerate(st.session_state.qa_history):
+                st.write(f"### 🧐 Pytanie {idx+1}:")
+                st.write(q)
+                st.write(f"### 💡 Odpowiedź {idx+1}:")
+                st.write(a)
+                st.write("---")  # Separator
 
 if __name__ == "__main__":
     main()
