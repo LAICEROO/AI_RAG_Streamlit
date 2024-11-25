@@ -19,6 +19,13 @@ The AI RAG Assistant is a Streamlit-based application that allows users to inter
 - **PDF Processing**: PyPDF2
 - **GPU Support**: CUDA
 
+## 📋 Requirements
+
+- Python 3.10+
+- CUDA-compatible GPU (recommended)
+- 8GB+ RAM
+- 6GB+ GPU VRAM
+
 ## 🛠️ Instalation 
 
 - Clone the repository:
@@ -42,12 +49,7 @@ The AI RAG Assistant is a Streamlit-based application that allows users to inter
 - Access the application: Open the displayed URL in your web browser (e.g., http://localhost:8501).
 
 
-## 📋 Requirements
 
-- Python 3.10+
-- CUDA-compatible GPU (recommended)
-- 8GB+ RAM
-- 6GB+ GPU VRAM
 
 ## 💻 Usage
 
