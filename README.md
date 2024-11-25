@@ -1,6 +1,8 @@
 # AI_RAG with streamlit
 The AI RAG Assistant is a Streamlit-based application that allows users to interact with uploaded PDF documents through natural language queries. By leveraging embedding models and a question-answering model, the application retrieves context from the uploaded PDFs to provide accurate and context-aware answers.
 
+![image](https://github.com/user-attachments/assets/1e88d87a-ff5c-4cfa-923c-be669f784b64)
+
 ## 🌟 Features
 
 - **PDF Document Processing**: Upload and process multiple PDF files
