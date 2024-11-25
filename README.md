@@ -102,3 +102,10 @@ Key parameters can be adjusted in the code:
 - `top_k`: Number of relevant chunks to retrieve (default: 5)
 - `temperature`: Response randomness (default: 0.7)
 - `chunk_size`: Size of text chunks (default: 500)
+
+## 📝 Note
+This application runs completely locally:
+- No API keys required
+- No internet connection needed after initial model download
+- All processing is done on your local machine
+- Your documents never leave your computer
