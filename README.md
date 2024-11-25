@@ -17,7 +17,6 @@ A Streamlit-based application that allows users to chat with their PDF documents
 - **Embeddings**: Sentence-Transformers (all-mpnet-base-v2)
 - **Vector Search**: FAISS
 - **PDF Processing**: PyPDF2
-- **Deep Learning**: PyTorch
 - **GPU Support**: CUDA
 
 ## 📋 Requirements
