@@ -1,5 +1,5 @@
 # AI_RAG with streamlit
-A Streamlit-based application that allows users to chat with their PDF documents using advanced language models and semantic search.
+The AI RAG Assistant is a Streamlit-based application that allows users to interact with uploaded PDF documents through natural language queries. By leveraging embedding models and a question-answering model, the application retrieves context from the uploaded PDFs to provide accurate and context-aware answers.
 
 ## 🌟 Features
 
@@ -18,6 +18,29 @@ A Streamlit-based application that allows users to chat with their PDF documents
 - **Vector Search**: FAISS
 - **PDF Processing**: PyPDF2
 - **GPU Support**: CUDA
+
+## 🛠️ Instalation 
+
+- Clone the repository:
+  
+```
+   git clone https://github.com/LAICEROO/AI_RAG_Streamlit.git
+```
+  
+- Install dependencies
+  
+```
+   pip install -r requirements.txt
+```
+
+- Run the application:
+
+```
+   streamlit run app.py
+```
+
+- Access the application: Open the displayed URL in your web browser (e.g., http://localhost:8501).
+
 
 ## 📋 Requirements
 
