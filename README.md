@@ -53,15 +53,19 @@ The AI RAG Assistant is a Streamlit-based application that allows users to inter
 
 ## 💻 Usage
 
-1. Start the application:
-   ```
-    streamlit run app.py
-   ```
-2. Open your browser and navigate to `http://localhost:8501`
+1. Upload PDFs:
+- Use the sidebar to upload one or more PDF documents.
+- The application processes the documents and indexes their content for retrieval.
 
-3. Upload PDF documents using the sidebar
+2. Ask Questions:
+- Type your question in the text input field in the main interface.
+- Click the Ask button to retrieve an answer based on the uploaded PDFs.
 
-4. Start asking questions about your documents!
+3. Review Chat History:
+- The interface displays a history of your queries and the assistant's responses.
+
+4. Manage Files and History:
+- Use the sidebar to view uploaded files and clear chat history if needed.
 
 ## 🔍 How It Works
 
