@@ -1,7 +1,27 @@
-streamlit
-PyPDF2
-sentence-transformers
-faiss-cpu
-transformers
-torch
-accelerate
+# Core libraries
+streamlit>=1.29.0
+langchain>=0.1.0
+langchain-community>=0.0.13
+langchain-core>=0.1.10
+langchain-text-splitters>=0.0.1
+langchain-huggingface>=0.0.1
+
+# PDF processing
+pdfplumber>=0.10.2
+
+# Text processing and tokenization
+nltk>=3.8.1
+
+# Vector embeddings and retrieval
+google-generativeai>=0.3.1
+rank_bm25>=0.2.2
+
+# Hugging Face integration
+huggingface-hub>=0.19.4
+transformers>=4.36.0
+
+# Optional but recommended dependencies
+python-dotenv>=1.0.0  # For loading environment variables
+
+# Added from the code block
+langchain-google-genai>=0.0.6 

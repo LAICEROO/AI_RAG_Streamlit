@@ -1,212 +1,245 @@
-import os
 import streamlit as st
-import PyPDF2
-import faiss
-import numpy as np
+from dotenv import load_dotenv
+import os
 import torch
-from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
-from threading import Thread
-from datetime import datetime
+from PyPDF2 import PdfReader
+from langchain.text_splitter import CharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.chat_models import ChatOpenAI
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+from htmlTemplates import css, bot_template, user_template
+from langchain_community.llms import HuggingFaceHub
+from mistralai import Mistral
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever, ContextualCompressionRetriever
+from langchain.schema import Document
+from langchain.retrievers.document_compressors import LLMChainExtractor
 
-# Check if CUDA is available
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print("Device Name:", device)
-
-# Initialize models and variables
-def initialize():
-    if 'embedding_model' not in st.session_state:
-        st.session_state.embedding_model = SentenceTransformer('all-mpnet-base-v2', device=device)
-    if 'tokenizer' not in st.session_state:
-        st.session_state.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-3B-Instruct", trust_remote_code=True)
-        st.session_state.qa_model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen2.5-3B-Instruct",
-            device_map="auto",
-            trust_remote_code=True
-        )
-    if 'index' not in st.session_state:
-        dimension = 768  # For all-mpnet-base-v2
-        st.session_state.index = faiss.IndexIDMap(faiss.IndexFlatL2(dimension))
-    if 'text_chunks' not in st.session_state:
-        st.session_state.text_chunks = []
-    if 'ids' not in st.session_state:
-        st.session_state.ids = []
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []
-    if 'uploaded_files_list' not in st.session_state:
-        st.session_state.uploaded_files_list = []
-    if 'current_question' not in st.session_state:
-        st.session_state.current_question = ""
-
-def extract_text_from_pdf(pdf_path):
-    reader = PyPDF2.PdfReader(pdf_path)
+def get_pdf_text(pdf_docs):
     text = ""
-    for page in reader.pages:
-        text += page.extract_text()
+    for pdf in pdf_docs:
+        pdf_reader = PdfReader(pdf)
+        for page in pdf_reader.pages:
+            text += page.extract_text()
     return text
 
-def split_text(text, max_length=500):
-    sentences = text.split('. ')
-    chunks = []
-    current_chunk = ''
-    for sentence in sentences:
-        if len(current_chunk) + len(sentence) <= max_length:
-            current_chunk += sentence + '. '
-        else:
-            chunks.append(current_chunk)
-            current_chunk = sentence + '. '
-    if current_chunk:
-        chunks.append(current_chunk)
+
+def get_text_chunks(text):
+    text_splitter = CharacterTextSplitter(
+        separator="\n",
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len
+    )
+    chunks = text_splitter.split_text(text)
     return chunks
 
-def embed_text(chunks):
-    embeddings = st.session_state.embedding_model.encode(chunks, convert_to_tensor=True)
-    embeddings = embeddings.cpu().detach().numpy()
-    return embeddings
 
-def process_pdfs(pdf_paths):
-    current_id = len(st.session_state.text_chunks)
-    for pdf_path in pdf_paths:
-        text = extract_text_from_pdf(pdf_path)
-        chunks = split_text(text)
-        embeddings = embed_text(chunks)
-        new_ids = [current_id + i for i in range(len(chunks))]
-        st.session_state.ids.extend(new_ids)
-        st.session_state.text_chunks.extend(chunks)
-        embeddings = np.array(embeddings).astype('float32')
-        st.session_state.index.add_with_ids(embeddings, np.array(new_ids))
-        current_id += len(chunks)
+def get_vectorstore(text_chunks):
+    # Check if GPU is available
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    st.info(f"Using {device} for embeddings")
+    
+    # Use multilingual-e5-large-instruct for embeddings with GPU if available
+    embeddings = HuggingFaceEmbeddings(
+        model_name="intfloat/multilingual-e5-large-instruct",
+        model_kwargs={"device": device},
+        encode_kwargs={"normalize_embeddings": True}
+    )
+    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+    return vectorstore, embeddings
 
-def format_chat_message(role, content):
-    if role == "user":
-        return f"<div style='background-color: #282434; color: white; padding: 10px; border-radius: 5px; margin: 5px 0;'><strong>You:</strong> {content}</div>"
+
+def get_bm25_retriever(text_chunks):
+    # Convert text chunks to documents for BM25
+    documents = [Document(page_content=chunk) for chunk in text_chunks]
+    bm25_retriever = BM25Retriever.from_documents(documents)
+    bm25_retriever.k = 5  # Number of documents to return
+    return bm25_retriever
+
+
+def create_mistral_contextual_compressor(embeddings):
+    """Create a contextual compressor using Mistral API for more relevant document retrieval"""
+    llm = MistralLLM()
+    compressor = LLMChainExtractor.from_llm(llm)
+    return compressor
+
+
+class MistralLLM:
+    """Custom LLM implementation for Mistral API to use with LangChain compressors"""
+    
+    def __init__(self):
+        self.client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
+        self.model = "mistral-small-latest"
+        
+    def __call__(self, prompt):
+        try:
+            response = self.client.chat.complete(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            st.error(f"Error in MistralLLM: {str(e)}")
+            return "Error retrieving context"
+
+
+def get_conversation_chain(vectorstore, text_chunks, embeddings):
+    # Set up Qwen model from HuggingFace
+    llm = HuggingFaceHub(
+        repo_id="Qwen/QwQ-32B",
+        model_kwargs={"max_new_tokens": 32768}
+    )
+    
+    # Set up BM25 retriever
+    bm25_retriever = get_bm25_retriever(text_chunks)
+    
+    # Set up semantic retriever from vectorstore
+    semantic_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    
+    # Create the Mistral contextual compressor
+    compressor = create_mistral_contextual_compressor(embeddings)
+    
+    # Apply contextual compression to the semantic retriever
+    contextual_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor,
+        base_retriever=semantic_retriever
+    )
+    
+    # Combine retrievers in the ensemble
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, contextual_retriever],
+        weights=[0.3, 0.7]  # Give more weight to contextual retriever
+    )
+    
+    # Set up memory
+    memory = ConversationBufferMemory(
+        memory_key='chat_history', return_messages=True)
+    
+    # Create conversation chain
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=ensemble_retriever,
+        memory=memory
+    )
+    
+    return conversation_chain, ensemble_retriever
+
+
+def handle_userinput(user_question):
+    # Get documents from retriever
+    docs = st.session_state.retriever.get_relevant_documents(user_question)
+    
+    # Get additional context from Mistral
+    mistral_context = get_mistral_context(user_question, docs)
+    
+    # If we have mistral context, add it to the question
+    if mistral_context:
+        enhanced_question = f"""
+        Question: {user_question}
+        
+        Additional context that might be helpful:
+        {mistral_context}
+        """
     else:
-        return f"<div style='background-color: #282434; color: white; padding: 10px; border-radius: 5px; margin: 5px 0;'><strong>Assistant:</strong> {content}</div>"
-
-def answer_question(question, max_length=2048):
-    question_embedding = st.session_state.embedding_model.encode([question], convert_to_tensor=True)
-    question_embedding = question_embedding.cpu().detach().numpy().astype('float32')
+        enhanced_question = user_question
     
-    top_k = 5
-    while top_k > 0:
-        D, I = st.session_state.index.search(np.array(question_embedding), top_k)
-        retrieved_chunks = [st.session_state.text_chunks[i] for i in I[0] if i < len(st.session_state.text_chunks)]
-        context = ' '.join(retrieved_chunks)
-        
-        # Include recent chat history in the prompt
-        recent_history = st.session_state.chat_history[-3:] if st.session_state.chat_history else []
-        chat_context = "\n".join([f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}" 
-                                for msg in recent_history])
-        
-        prompt = f"""<|im_start|>system
-You are a helpful AI assistant that answers questions based on the provided context and chat history. 
-Your answers should be accurate, concise, and directly based on the context provided.
-<|im_end|>
-<|im_start|>user
-Previous conversation:
-{chat_context}
+    # Get response from conversation chain
+    response = st.session_state.conversation({'question': enhanced_question})
+    st.session_state.chat_history = response['chat_history']
 
-Context from documents:
-{context}
-
-Current question: {question}
-<|im_end|>
-<|im_start|>assistant
-"""
-        
-        inputs = st.session_state.tokenizer(prompt, return_tensors='pt').to(device)
-        total_length = inputs.input_ids.shape[1]
-        if total_length <= max_length:
-            break
+    # Display chat history
+    for i, message in enumerate(st.session_state.chat_history):
+        if i % 2 == 0:
+            st.write(user_template.replace(
+                "{{MSG}}", message.content), unsafe_allow_html=True)
         else:
-            top_k -= 1
+            st.write(bot_template.replace(
+                "{{MSG}}", message.content), unsafe_allow_html=True)
 
-    with torch.no_grad():
-        outputs = st.session_state.qa_model.generate(
-            inputs.input_ids,
-            max_new_tokens=512,
-            temperature=0.7,
-            top_p=0.9,
-            repetition_penalty=1.1,
-            pad_token_id=st.session_state.tokenizer.pad_token_id,
-            eos_token_id=st.session_state.tokenizer.eos_token_id
-        )
+
+def get_mistral_context(query, docs):
+    """Get additional context from Mistral API."""
+    if "MISTRAL_API_KEY" not in os.environ:
+        st.warning("MISTRAL_API_KEY not found in environment variables. Skipping Mistral context.")
+        return ""
     
-    answer = st.session_state.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
-    return answer.strip()
+    try:
+        client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
+        
+        # Combine document content
+        doc_content = "\n\n".join([doc.page_content for doc in docs[:3]])
+        
+        # Create prompt for Mistral
+        prompt = f"""Given the following content from documents and a user query, 
+        provide the most relevant information to answer the query. 
+        
+        DOCUMENTS:
+        {doc_content}
+        
+        USER QUERY: {query}
+        
+        RELEVANT INFORMATION:"""
+        
+        # Get response from Mistral using the updated API
+        chat_response = client.chat.complete(
+            model="mistral-small-latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+        
+        return chat_response.choices[0].message.content
+    except Exception as e:
+        st.error(f"Error using Mistral API: {str(e)}")
+        return ""
 
-def display_chat_history():
-    chat_container = st.container()
-    with chat_container:
-        for message in st.session_state.chat_history:
-            st.markdown(format_chat_message(message['role'], message['content']), unsafe_allow_html=True)
-
-def handle_submit():
-    if st.session_state.current_question:
-        return True
-    return False
 
 def main():
-    st.title("PDF Chat Assistant")
-    initialize()
+    load_dotenv()
+    st.set_page_config(page_title="Chat with multiple PDFs",
+                       page_icon=":books:")
+    st.write(css, unsafe_allow_html=True)
 
-    # Sidebar for file management and settings
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = None
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = None
+    if "retriever" not in st.session_state:
+        st.session_state.retriever = None
+
+    st.header("Chat with multiple PDFs :books:")
+    user_question = st.text_input("Ask a question about your documents:")
+    if user_question:
+        handle_userinput(user_question)
+
     with st.sidebar:
-        st.header("Document Management")
-        uploaded_files = st.file_uploader("Upload PDF files", type=['pdf'], accept_multiple_files=True)
-        
-        if uploaded_files:
-            new_files = [f for f in uploaded_files if f.name not in st.session_state.uploaded_files_list]
-            if new_files:
-                pdf_paths = []
-                for uploaded_file in new_files:
-                    if not os.path.exists("uploads"):
-                        os.makedirs("uploads")
-                    file_path = os.path.join("uploads", uploaded_file.name)
-                    with open(file_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                    pdf_paths.append(file_path)
-                    st.session_state.uploaded_files_list.append(uploaded_file.name)
-                process_pdfs(pdf_paths)
-                st.success(f"Processed {len(new_files)} new PDF(s)")
-        
-        if st.session_state.uploaded_files_list:
-            st.write("Uploaded Documents:")
-            for file_name in st.session_state.uploaded_files_list:
-                st.write(f"📄 {file_name}")
-        
-        if st.button("Clear Chat History"):
-            st.session_state.chat_history = []
-            st.success("Chat history cleared!")
+        st.subheader("Your documents")
+        pdf_docs = st.file_uploader(
+            "Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
+        if st.button("Process"):
+            with st.spinner("Processing"):
+                # get pdf text
+                raw_text = get_pdf_text(pdf_docs)
 
-    # Main chat interface
-    display_chat_history()
+                # get the text chunks
+                text_chunks = get_text_chunks(raw_text)
 
-    # Question input with submit button
-    question = st.text_input("Ask a question about your documents:", key="question_input")
-    if st.button("Ask"):
-        if not st.session_state.text_chunks:
-            st.warning("Please upload some PDF documents first!")
-            return
-            
-        if question:
-            with st.spinner("Thinking..."):
-                # Add user message to chat history
-                st.session_state.chat_history.append({
-                    "role": "user",
-                    "content": question,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
+                # create vector store
+                vectorstore, embeddings = get_vectorstore(text_chunks)
                 
-                # Generate and add assistant's response
-                answer = answer_question(question)
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": answer,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
+                # create conversation chain and retriever
+                conversation_chain, retriever = get_conversation_chain(vectorstore, text_chunks, embeddings)
                 
-                st.rerun()
+                # Store in session state
+                st.session_state.conversation = conversation_chain
+                st.session_state.retriever = retriever
+
 
 if __name__ == '__main__':
     main()
