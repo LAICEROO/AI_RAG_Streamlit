@@ -50,9 +50,6 @@ The AI RAG Assistant is a Streamlit-based application that allows users to inter
 
 - Access the application: Open the displayed URL in your web browser (e.g., http://localhost:8501).
 
-
-
-
 ## 💻 Usage
 
 1. **Upload PDFs**:
@@ -109,3 +106,61 @@ This application runs completely locally:
 - No internet connection needed after initial model download
 - All processing is done on your local machine
 - Your documents never leave your computer
+
+# Chat with PDFs Application
+
+This application allows you to upload multiple PDF documents and ask questions about their content. It uses:
+
+- Qwen/QwQ-32B for generating responses via Hugging Face's Inference API
+- multilingual-e5-large-instruct for creating embeddings of your documents
+
+## Installation
+
+### 1. Clone the repository
+```bash
+git clone <your-repo-url>
+cd <repo-directory>
+```
+
+### 2. Create a virtual environment
+```bash
+python -m venv venv
+```
+
+### 3. Activate the virtual environment
+
+#### Windows:
+```bash
+venv\Scripts\activate
+```
+
+#### macOS/Linux:
+```bash
+source venv/bin/activate
+```
+
+### 4. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 5. Install PyTorch with CUDA support (if available)
+For Windows with CUDA:
+```bash
+python install_pytorch.py
+```
+
+Alternatively, you can manually install PyTorch:
+
+- **For CUDA support** (if you have a compatible NVIDIA GPU):
+  ```bash
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+  ```
+
+- **For CPU only**:
+  ```bash
+  pip install torch torchvision torchaudio
+  ```
+
+### 6. Set up environment variables
+Create a `.env` file in the root directory with the following:

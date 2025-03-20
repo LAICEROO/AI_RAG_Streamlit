@@ -7,21 +7,46 @@ langchain-text-splitters>=0.0.1
 langchain-huggingface>=0.0.1
 
 # PDF processing
+pypdf2>=3.0.0
 pdfplumber>=0.10.2
 
 # Text processing and tokenization
 nltk>=3.8.1
 
 # Vector embeddings and retrieval
-google-generativeai>=0.3.1
-rank_bm25>=0.2.2
+faiss-cpu>=1.7.4
+numpy>=1.24.0
 
 # Hugging Face integration
 huggingface-hub>=0.19.4
-transformers>=4.36.0
+transformers>=4.45.0
+sentence-transformers>=2.2.2
 
-# Optional but recommended dependencies
-python-dotenv>=1.0.0  # For loading environment variables
+# PyTorch - use CPU version by default
+torch>=2.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Acceleration
+accelerate>=0.20.0
+
+# Additional dependencies
+sentencepiece>=0.1.99
 
 # Added from the code block
-langchain-google-genai>=0.0.6 
+langchain-google-genai>=0.0.6
+
+# New packages from the code block
+accelerate
+
+# New packages from the code block
+openai
+sentencepiece
+
+# HTTP requests
+requests>=2.31.0
+
+# Added for Mistral integration
+langchain-mistralai>=0.0.1
+mistralai>=0.0.7 
