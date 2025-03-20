@@ -15,7 +15,6 @@ nltk>=3.8.1
 
 # Vector embeddings and retrieval
 faiss-cpu>=1.7.4
-numpy>=1.24.0
 
 # Hugging Face integration
 huggingface-hub>=0.19.4
@@ -42,11 +41,4 @@ accelerate
 
 # New packages from the code block
 openai
-sentencepiece
-
-# HTTP requests
-requests>=2.31.0
-
-# Added for Mistral integration
-langchain-mistralai>=0.0.1
-mistralai>=0.0.7 
+sentencepiece 

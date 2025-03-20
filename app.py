@@ -206,7 +206,7 @@ def get_conversation_chain(vectorstore):
     # Create the chain
     conversation_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
-        retriever=vectorstore.as_retriever(search_kwargs={"k": 5}),
+        retriever=vectorstore.as_retriever(search_kwargs={"k": 10}),
         memory=memory,
         verbose=True,
         return_source_documents=True,
