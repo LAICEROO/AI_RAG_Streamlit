@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+.env
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Pytest
+.cache/
+*.cover
+*.log
+*.egg-info/
+dist/
+build/
+
+# Streamlit
+*.streamlit/
+
+# Miscellaneous
+*.DS_Store
+*.log
+*.tmp 
