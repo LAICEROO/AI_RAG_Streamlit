@@ -164,3 +164,71 @@ Alternatively, you can manually install PyTorch:
 
 ### 6. Set up environment variables
 Create a `.env` file in the root directory with the following:
+
+```
+
+# RAG Chat with PDFs and Web Search
+
+This application provides a chat interface for interacting with your PDF documents and web search results using Retrieval-Augmented Generation (RAG).
+
+## Key Features
+
+- **Chat with multiple PDFs**: Upload and process PDF documents to chat with their content
+- **Web Search Integration**: Enhanced with Tavily web search for real-time information
+- **Advanced RAG System**: Uses a state-of-the-art hybrid retrieval approach
+
+## Hybrid Search System
+
+This application implements an advanced hybrid search system that combines:
+
+1. **Semantic Search (FAISS)**: Uses E5 multilingual embeddings to find documents based on meaning
+2. **Keyword Search (BM25)**: Uses traditional keyword-based search for exact matches
+3. **Contextual Reranking (BART)**: Uses BART-large-CNN to rerank retrieved documents based on query context
+
+This hybrid approach is based on best practices from:
+- [Anthropic's Contextual Retrieval Research](https://www.anthropic.com/news/contextual-retrieval)
+- [LangChain's BM25 Retriever](https://python.langchain.com/docs/integrations/retrievers/bm25/)
+- [Hybrid Search Best Practices](https://medium.com/etoai/hybrid-search-combining-bm25-and-semantic-search-for-better-results-with-lan-1358038fe7e6)
+
+## Getting Started
+
+1. Clone this repository
+2. Install requirements:
+   ```
+   pip install -r requirements.txt
+   ```
+3. Create a `.env` file with your API keys:
+   ```
+   MISTRAL_API_KEY=your_mistral_key
+   TAVILY_API_KEY=your_tavily_key
+   HUGGINGFACEHUB_API_TOKEN=your_huggingface_key
+   ```
+4. Run the application:
+   ```
+   streamlit run app.py
+   ```
+
+## Usage
+
+1. **Upload Documents**: Use the sidebar to upload PDF files
+2. **Process Documents**: Click "Process" to extract and embed the text
+3. **Configure Search**: Adjust the retrieval settings in the sidebar for optimal results
+4. **Chat**: Ask questions about your documents in the chat interface
+
+## Retrieval Settings
+
+- **Hybrid Search**: Toggle to enable/disable the hybrid search system
+- **Semantic Weight**: Adjust the balance between semantic search and BM25 (higher values favor semantic)
+- **Number of Documents**: Control how many documents are retrieved for each query
+- **BART Reranking**: Enable/disable contextual reranking of retrieved documents
+
+## Web Search Integration
+
+- **Enable Web Search**: Toggle to automatically search the web for each question
+- **Search Depth**: Choose between basic (faster) or advanced (more thorough) search
+- **Additional Options**: Control max results, time range, and other search parameters
+
+## Performance Optimization
+
+- **Performance Mode**: Optimizes embedding computation for better performance
+- **Batch Size**: Control the batch size for embedding calculations

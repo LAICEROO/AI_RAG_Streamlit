@@ -16,170 +16,74 @@ from mistralai import Mistral
 import requests
 import json
 import numpy as np
+from utils.embedding_utils import get_text_chunks, average_pool, MultilangE5Embeddings, get_vectorstore
+from utils.hybrid_search import get_hybrid_retriever
 
-def get_pdf_text(pdf_docs):
+def get_pdf_text(uploaded_files):
+    """
+    Extract text from various document formats.
+    Supports PDF, TXT, DOCX, CSV, and JSON files.
+    """
     text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
+    
+    for file in uploaded_files:
+        # Get file extension
+        file_ext = file.name.split('.')[-1].lower()
+        
+        try:
+            # Handle different file types
+            if file_ext == 'pdf':
+                # Handle PDF files
+                pdf_reader = PdfReader(file)
+                for page in pdf_reader.pages:
+                    text += page.extract_text() + "\n\n"
+                    
+            elif file_ext == 'txt':
+                # Handle text files
+                text += file.getvalue().decode('utf-8') + "\n\n"
+                
+            elif file_ext == 'docx':
+                # Handle DOCX files
+                try:
+                    from docx import Document
+                    doc = Document(file)
+                    for para in doc.paragraphs:
+                        text += para.text + "\n"
+                    text += "\n\n"
+                except ImportError:
+                    # If python-docx is not installed
+                    st.error(f"Missing python-docx library. Install with 'pip install python-docx' to process {file.name}")
+                    continue
+                    
+            elif file_ext == 'csv':
+                # Handle CSV files
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(file)
+                    text += df.to_string() + "\n\n"
+                except ImportError:
+                    st.error(f"Missing pandas library. Install with 'pip install pandas' to process {file.name}")
+                    continue
+                    
+            elif file_ext == 'json':
+                # Handle JSON files
+                import json
+                content = json.loads(file.getvalue().decode('utf-8'))
+                text += json.dumps(content, indent=2) + "\n\n"
+                
+            else:
+                st.warning(f"Unsupported file type: {file_ext} - {file.name} was skipped")
+                
+        except Exception as e:
+            st.error(f"Error processing file {file.name}: {str(e)}")
+            import traceback
+            print(f"Error details for {file.name}: {traceback.format_exc()}")
+            continue
+            
     return text
 
 
-def get_text_chunks(text):
-    # First, break text into paragraphs
-    paragraphs = text.split("\n\n")
-    
-    # Process each paragraph individually to ensure we don't exceed chunk size
-    chunks = []
-    current_chunk = ""
-    current_size = 0
-    
-    for paragraph in paragraphs:
-        # Skip empty paragraphs
-        if not paragraph.strip():
-            continue
-        
-        # If paragraph is already too large, split it into sentences
-        if len(paragraph) > 800:  # Using 800 to leave room for overlap
-            sentences = paragraph.replace("\n", " ").split(". ")
-            sentences = [s + "." if not s.endswith(".") else s for s in sentences if s.strip()]
-            
-            for sentence in sentences:
-                # If adding sentence would exceed chunk size, start a new chunk
-                if current_size + len(sentence) > 800:
-                    if current_chunk:  # Only add if we have content
-                        chunks.append(current_chunk.strip())
-                    current_chunk = sentence
-                    current_size = len(sentence)
-                else:
-                    current_chunk += " " + sentence if current_chunk else sentence
-                    current_size += len(sentence)
-        else:
-            # If adding paragraph would exceed chunk size, start a new chunk
-            if current_size + len(paragraph) > 800:
-                if current_chunk:  # Only add if we have content
-                    chunks.append(current_chunk.strip())
-                current_chunk = paragraph
-                current_size = len(paragraph)
-            else:
-                # Add paragraph to current chunk
-                current_chunk += "\n\n" + paragraph if current_chunk else paragraph
-                current_size += len(paragraph)
-    
-    # Add the last chunk if it's not empty
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-    
-    # Check if any chunks still exceed our limit
-    for i, chunk in enumerate(chunks):
-        if len(chunk) > 1000:
-            st.warning(f"Chunk {i} has size {len(chunk)}, which exceeds the limit. Will be split further.")
-            # Further split into smaller chunks
-            text_splitter = CharacterTextSplitter(
-                separator=" ",
-                chunk_size=900,  # Lower than 1000 to ensure we don't exceed limit
-                chunk_overlap=100,
-                length_function=len
-            )
-            replacement_chunks = text_splitter.split_text(chunk)
-            # Replace the oversized chunk with the smaller chunks
-            chunks.pop(i)
-            for j, replacement in enumerate(replacement_chunks):
-                chunks.insert(i+j, replacement)
-    
-    return chunks
-
-
-def average_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
-    last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
-    return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
-
-
-class MultilangE5Embeddings(Embeddings):
-    def __init__(self, model_name="intfloat/multilingual-e5-large-instruct", batch_size=8):
-        super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
-        self.batch_size = batch_size
-        # Move model to GPU if available
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = self.model.to(self.device)
-        
-    def embed_documents(self, texts):
-        # Pre-process texts to add instruction format
-        task = "Represent this document for retrieval:"
-        processed_texts = [f"Instruct: {task}\nQuery: {text}" for text in texts]
-        
-        # Process in batches for better memory management
-        embeddings_list = []
-        for i in range(0, len(processed_texts), self.batch_size):
-            batch_texts = processed_texts[i:i+self.batch_size]
-            
-            # Tokenize the input texts
-            batch_dict = self.tokenizer(batch_texts, max_length=512, padding=True, truncation=True, return_tensors='pt')
-            
-            # Move tensors to device
-            batch_dict = {k: v.to(self.device) for k, v in batch_dict.items()}
-            
-            # Get embeddings
-            with torch.no_grad():
-                outputs = self.model(**batch_dict)
-            
-            embeddings = average_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
-            
-            # Normalize embeddings
-            embeddings = F.normalize(embeddings, p=2, dim=1)
-            
-            # Move back to CPU and convert to list
-            embeddings_list.append(embeddings.cpu().numpy())
-        
-        # Concatenate all batch embeddings
-        if len(embeddings_list) > 1:
-            return np.vstack(embeddings_list).tolist()
-        return embeddings_list[0].tolist()
-    
-    def embed_query(self, text):
-        # Pre-process query to add instruction format
-        task = "Represent this query for retrieval:"
-        processed_text = f"Instruct: {task}\nQuery: {text}"
-        
-        # Tokenize the query
-        batch_dict = self.tokenizer([processed_text], max_length=512, padding=True, truncation=True, return_tensors='pt')
-        
-        # Move tensors to device
-        batch_dict = {k: v.to(self.device) for k, v in batch_dict.items()}
-        
-        # Get embeddings
-        with torch.no_grad():
-            outputs = self.model(**batch_dict)
-        
-        embeddings = average_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
-        
-        # Normalize embeddings
-        embeddings = F.normalize(embeddings, p=2, dim=1)
-        
-        # Move back to CPU and convert to list
-        return embeddings.cpu().numpy().tolist()[0]
-    
-    # Implement the callable interface that LangChain expects
-    def embed_text(self, text):
-        return self.embed_query(text)
-    
-    # This makes the object callable directly
-    def __call__(self, text):
-        return self.embed_text(text)
-
-
-def get_vectorstore(text_chunks):
-    # Apply performance settings
-    batch_size = st.session_state.embedding_batch_size if st.session_state.use_performance_mode else 4
-    embeddings = MultilangE5Embeddings(batch_size=batch_size)
-    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
-    return vectorstore
-
-
-def get_conversation_chain(vectorstore):
+def get_conversation_chain(vectorstore, text_chunks=None):
     # Use Mistral AI directly
     api_key = os.environ["MISTRAL_API_KEY"]
     
@@ -196,17 +100,42 @@ def get_conversation_chain(vectorstore):
     from langchain.memory import ConversationBufferMemory
     from langchain_core.runnables.history import RunnableWithMessageHistory
     from langchain_core.messages import HumanMessage, AIMessage
-    
+
     memory = ConversationBufferMemory(
         memory_key='chat_history', 
         return_messages=True, 
         output_key='answer'
     )
     
+    # Create hybrid retriever if text_chunks are provided
+    if text_chunks and st.session_state.use_hybrid_search:
+        try:
+            retriever = get_hybrid_retriever(
+                vectorstore=vectorstore,
+                text_chunks=text_chunks,
+                k=st.session_state.retrieve_k,
+                semantic_weight=st.session_state.semantic_weight,
+                use_reranking=st.session_state.use_contextual_reranking
+            )
+            
+            # Check if we got a HybridRetriever or a fallback retriever
+            if not hasattr(retriever, 'add_texts'):
+                st.warning("Hybrid search creation failed. Using standard search instead.")
+                st.session_state.use_hybrid_search = False
+                
+        except Exception as e:
+            st.error(f"Error setting up hybrid search: {e}")
+            st.warning("Falling back to standard vector search.")
+            retriever = vectorstore.as_retriever(search_kwargs={"k": st.session_state.retrieve_k})
+            st.session_state.use_hybrid_search = False
+    else:
+        # Use standard vectorstore retriever
+        retriever = vectorstore.as_retriever(search_kwargs={"k": st.session_state.retrieve_k})
+    
     # Create the chain
     conversation_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
-        retriever=vectorstore.as_retriever(search_kwargs={"k": 10}),
+        retriever=retriever,
         memory=memory,
         verbose=True,
         return_source_documents=True,
@@ -215,6 +144,71 @@ def get_conversation_chain(vectorstore):
     
     return conversation_chain
 
+
+def generate_source_summary(source_documents):
+    """
+    Generate a summary from the retrieved source documents
+    
+    Args:
+        source_documents: List of document objects with page_content attribute
+        
+    Returns:
+        List of bullet points summarizing key information
+    """
+    # Extract all text from documents
+    all_text = ""
+    for doc in source_documents[:5]:  # Limit to first 5 documents to avoid token limits
+        all_text += doc.page_content + "\n\n"
+    
+    # Generic identification of key concepts
+    import re
+    from collections import Counter
+    
+    # Check if text contains significant non-Latin characters (likely non-English)
+    non_latin_chars = re.findall(r'[^\x00-\x7F]', all_text)
+    is_non_latin = len(non_latin_chars) > len(all_text) * 0.05  # If >5% non-Latin
+    
+    # Different approach based on detected language characteristics
+    if is_non_latin:
+        # For non-Latin scripts or multilingual content, try character n-gram approach
+        # Extract word-like sequences that might be terms in any language
+        words = re.findall(r'\b\w+\b', all_text)
+        
+        # Get most frequent words that are reasonably long
+        word_counts = Counter([w.lower() for w in words if len(w) > 3])
+        top_terms = [term for term, count in word_counts.most_common(10) if count > 2]
+    else:
+        # Standard approach for primarily Latin-script content
+        words = re.findall(r'\b[A-Za-z][A-Za-z-]{3,15}\b', all_text)
+        words = [word.lower() for word in words if word.lower() not in 
+                ['the', 'and', 'that', 'for', 'with', 'this', 'from', 'these', 'those', 
+                'their', 'there', 'what', 'when', 'where', 'which', 'while', 'would']]
+        
+        # Get most common terms
+        word_counts = Counter(words)
+        top_terms = [term for term, count in word_counts.most_common(8) if count > 2]
+    
+    # Generate generic bullet points if we found key terms
+    if top_terms:
+        bullets = []
+        if len(top_terms) >= 1:
+            bullets.append(f"The documents primarily discuss **{top_terms[0]}** and related concepts.")
+        if len(top_terms) >= 3:
+            bullets.append(f"Key topics include **{top_terms[0]}**, **{top_terms[1]}**, and **{top_terms[2]}**.")
+        if len(top_terms) >= 5:
+            bullets.append(f"Additional topics covered: **{top_terms[3]}** and **{top_terms[4]}**.")
+        bullets.append("The information includes definitions, explanations, and technical details on these subjects.")
+        bullets.append("Several sources provide complementary perspectives on these topics.")
+        return bullets
+    
+    # Fallback generic summary if no key terms found
+    return [
+        "The retrieved documents contain information related to your query.",
+        "Multiple sources provide different perspectives and details on the topic.",
+        "The content includes definitions, explanations, and technical specifications.",
+        "Some sources may include academic or research perspectives.",
+        "Consider reviewing the individual sources for more specific information."
+    ]
 
 def handle_userinput(user_question):
     web_context = ""
@@ -307,7 +301,7 @@ Please incorporate this web information into your response and cite sources when
             
         # Get updated chat history
         st.session_state.chat_history = st.session_state.conversation.memory.chat_memory.messages
-        
+
         # Update the messages in session state for display
         st.session_state.messages = []
         for message in st.session_state.chat_history:
@@ -316,62 +310,195 @@ Please incorporate this web information into your response and cite sources when
             else:
                 st.session_state.messages.append({"role": "assistant", "content": message.content})
                 
-        # Display source documents if available
+        # Display source documents if available - improved styling and multilingual support
         if 'source_documents' in response and response['source_documents']:
-            with st.expander("Document Sources"):
-                for i, doc in enumerate(response['source_documents']):
-                    st.markdown(f"**Source {i+1}:**")
-                    st.write(doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content)
-                    if hasattr(doc.metadata, 'source') and doc.metadata.source:
-                        st.write(f"From: {doc.metadata.source}")
-                    st.divider()
+            # Generate a summary of retrieved documents if option is enabled
+            if st.session_state.show_source_summary:
+                # Generate dynamic summary based on document content
+                bullet_points = generate_source_summary(response['source_documents'])
+                
+                # Display a combined summary before showing individual sources
+                with st.expander("Retrieved Documents Summary", expanded=True):
+                    st.info("Below is a summary of the key information found in the retrieved documents:")
+                    
+                    # Display dynamic bullet points
+                    for point in bullet_points:
+                        st.markdown(f"- {point}")
+            
+            # Show individual sources
+            with st.expander("Document Sources", expanded=True):
+                # Create a container for sources to improve layout
+                sources_container = st.container()
+                
+                with sources_container:
+                    for i, doc in enumerate(response['source_documents']):
+                        source_box = st.container()
+                        
+                        with source_box:
+                            st.markdown(f"#### Source {i+1}")
+                            
+                            # Format content for better readability
+                            content = doc.page_content
+                            
+                            # Escape HTML to prevent rendering issues with special characters
+                            import html
+                            escaped_content = html.escape(content)
+                            
+                            # Handle very long content with truncation and expandable view
+                            is_long_content = len(content) > 1000
+                            display_content = escaped_content[:1000] + "..." if is_long_content else escaped_content
+                            
+                            # Create a styled source box with better handling of multilingual content
+                            st.markdown(
+                                f"""
+                                <div style="background-color: #777777; 
+                                            padding: 15px; 
+                                            border-radius: 10px; 
+                                            border-left: 5px solid #4B9FEA; 
+                                            margin-bottom: 15px;
+                                            font-family: 'Source Sans Pro', sans-serif;
+                                            overflow-wrap: break-word;
+                                            word-wrap: break-word;
+                                            white-space: pre-wrap;">
+                                    {display_content}
+                                </div>
+                                """, 
+                                unsafe_allow_html=True
+                            )
+                            
+                            # Add expandable section for viewing full content if truncated
+                            if is_long_content:
+                                with st.expander("View full content"):
+                                    st.markdown(
+                                        f"""
+                                        <div style="background-color: #f8f9fa; 
+                                                    padding: 10px; 
+                                                    border-radius: 5px;
+                                                    overflow-wrap: break-word;
+                                                    word-wrap: break-word;
+                                                    white-space: pre-wrap;">
+                                            {escaped_content}
+                                        </div>
+                                        """, 
+                                        unsafe_allow_html=True
+                                    )
+                            
+                            # Display source metadata in a cleaner format
+                            if hasattr(doc, 'metadata') and doc.metadata:
+                                metadata_html = ""
+                                
+                                if 'source' in doc.metadata:
+                                    source_text = doc.metadata['source']
+                                    # Truncate extremely long sources
+                                    if len(source_text) > 200:
+                                        source_text = source_text[:197] + "..."
+                                    metadata_html += f"<span style='font-weight: bold;'>Source:</span> {html.escape(source_text)}<br>"
+                                elif 'url' in doc.metadata:
+                                    url = doc.metadata['url']
+                                    # Ensure URL is properly formatted
+                                    if len(url) > 100:
+                                        displayed_url = url[:97] + "..."
+                                    else:
+                                        displayed_url = url
+                                    metadata_html += f"<span style='font-weight: bold;'>URL:</span> <a href='{html.escape(url)}' target='_blank'>{html.escape(displayed_url)}</a><br>"
+                                
+                                if metadata_html:
+                                    st.markdown(
+                                        f"""
+                                        <div style="margin-top: 5px; margin-bottom: 20px; font-size: 14px;">
+                                            {metadata_html}
+                                        </div>
+                                        """, 
+                                        unsafe_allow_html=True
+                                    )
+                            
+                            st.divider()
     except Exception as e:
         st.error(f"Error processing your question: {str(e)}")
         import traceback
         st.error(traceback.format_exc())
 
 
-def perform_tavily_search(query, search_depth="basic", max_results=5, include_answer=True, include_images=False, time_range=None):
+def perform_tavily_search(query, search_depth="basic", max_results=10, include_answer=True, include_images=False, time_range=None):
     """
-    Perform a search using the Tavily API.
+    Perform a search using the Tavily API with improved error handling and options.
     
     Args:
         query (str): The search query
-        search_depth (str): Either "basic" or "advanced"
-        max_results (int): Maximum number of results to return
+        search_depth (str): Either "basic" or "advanced" 
+        max_results (int): Maximum number of results to return (up to 30)
         include_answer (bool): Whether to include an AI-generated answer
         include_images (bool): Whether to include images in the results
-        time_range (str, optional): Time range for results (e.g., "day", "week", "month")
+        time_range (str, optional): Time range for results ("day", "week", "month")
         
     Returns:
         dict: The search results from Tavily
     """
     url = "https://api.tavily.com/search"
     
+    # Ensure we have an API key
+    api_key = os.environ.get("TAVILY_API_KEY") or st.session_state.get("TAVILY_API_KEY")
+    if not api_key:
+        return {
+            "error": "Tavily API key not found. Please set the TAVILY_API_KEY environment variable."
+        }
+    
+    # Prepare request payload
     payload = {
         "query": query,
         "search_depth": search_depth,
         "include_answer": include_answer,
         "include_images": include_images,
-        "max_results": max_results
+        "max_results": min(max_results, 30)  # Respect Tavily's limit of 30 results
     }
     
     # Add optional parameters if provided
     if time_range:
         payload["time_range"] = time_range
     
+    # Add advanced options available in Tavily API
+    # Include domains from which to include results
+    if st.session_state.get("include_domains"):
+        payload["include_domains"] = st.session_state.include_domains
+        
+    # Include domains from which to exclude results    
+    if st.session_state.get("exclude_domains"):
+        payload["exclude_domains"] = st.session_state.exclude_domains
+    
     headers = {
-        "Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
     try:
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()  # Raise an exception for HTTP errors
-        return response.json()
+        
+        results = response.json()
+        
+        # Log search information if in developer mode
+        if st.session_state.get("developer_mode"):
+            print(f"Tavily search results - query: '{query}', results count: {len(results.get('results', []))}")
+            if "answer" in results:
+                print(f"Tavily answer: {results['answer'][:100]}...")
+        
+        return results
+        
     except requests.exceptions.RequestException as e:
-        st.error(f"Error during Tavily search: {e}")
-        return {"error": str(e)}
+        error_message = f"Error during Tavily search: {e}"
+        if hasattr(e, 'response') and e.response:
+            try:
+                error_details = e.response.json()
+                error_message += f" - {error_details.get('message', 'No details')}"
+            except:
+                error_message += f" - Status code: {e.response.status_code}"
+        
+        st.error(error_message)
+        return {"error": error_message}
+    except Exception as e:
+        error_message = f"Unexpected error during Tavily search: {e}"
+        st.error(error_message)
+        return {"error": error_message}
 
 
 def add_search_results_to_vectorstore(content_texts, source_urls):
@@ -392,17 +519,49 @@ def add_search_results_to_vectorstore(content_texts, source_urls):
             })
     
     if search_text_chunks:
-        # Get the existing retriever's vectorstore
-        existing_vectorstore = st.session_state.conversation.retriever.vectorstore
-        
-        # Add the new texts to the existing vectorstore with metadata
-        existing_vectorstore.add_texts(
-            texts=search_text_chunks,
-            metadatas=metadata_list
-        )
-        
-        # Recreate the conversation chain with the updated vectorstore
-        st.session_state.conversation = get_conversation_chain(existing_vectorstore)
+        try:
+            if st.session_state.use_hybrid_search and hasattr(st.session_state.conversation.retriever, 'add_texts'):
+                # For hybrid retriever, use its add_texts method which updates both vectorstore and BM25
+                st.session_state.conversation.retriever.add_texts(
+                    texts=search_text_chunks,
+                    metadatas=metadata_list
+                )
+            else:
+                # Get the existing retriever's vectorstore
+                if hasattr(st.session_state.conversation.retriever, '_vectorstore'):
+                    # For hybrid retriever
+                    existing_vectorstore = st.session_state.conversation.retriever._vectorstore
+                elif hasattr(st.session_state.conversation.retriever, 'vectorstore'):
+                    # For some standard retrievers
+                    existing_vectorstore = st.session_state.conversation.retriever.vectorstore
+                else:
+                    # For FAISS vectorstore retriever
+                    existing_vectorstore = st.session_state.conversation.retriever.vectorstore
+                
+                # Add the new texts to the existing vectorstore with metadata
+                existing_vectorstore.add_texts(
+                    texts=search_text_chunks,
+                    metadatas=metadata_list
+                )
+                
+                # Recreate the conversation chain with the updated vectorstore
+                # For hybrid search, we need to pass the original text chunks
+                if st.session_state.use_hybrid_search:
+                    # Update all_text_chunks with the new search results
+                    st.session_state.all_text_chunks.extend(search_text_chunks)
+                    
+                    st.session_state.conversation = get_conversation_chain(
+                        existing_vectorstore, 
+                        search_text_chunks + st.session_state.all_text_chunks
+                    )
+                else:
+                    st.session_state.conversation = get_conversation_chain(existing_vectorstore)
+                    
+            st.success("Search results added to your knowledge base!")
+        except Exception as e:
+            st.error(f"Error adding search results to knowledge base: {str(e)}")
+            import traceback
+            print(f"Error details: {traceback.format_exc()}")
 
 
 def main():
@@ -427,6 +586,18 @@ def main():
         st.session_state.embedding_batch_size = 8
     if "use_performance_mode" not in st.session_state:
         st.session_state.use_performance_mode = True
+    if "all_text_chunks" not in st.session_state:
+        st.session_state.all_text_chunks = []
+    if "use_hybrid_search" not in st.session_state:
+        st.session_state.use_hybrid_search = True
+    if "retrieve_k" not in st.session_state:
+        st.session_state.retrieve_k = 10
+    if "semantic_weight" not in st.session_state:
+        st.session_state.semantic_weight = 0.7
+    if "use_contextual_reranking" not in st.session_state:
+        st.session_state.use_contextual_reranking = True
+    if "show_source_summary" not in st.session_state:
+        st.session_state.show_source_summary = True
     
     # Set default values for removed UI elements
     st.session_state.auto_add_search_results = True
@@ -467,12 +638,23 @@ def main():
 
     with st.sidebar:
         # Add tabs to organize the sidebar
-        tab1, tab2, tab3 = st.tabs(["Documents", "Web Search", "Advanced Settings"])
+        tab1, tab2, tab3, tab4 = st.tabs(["Documents", "Web Search", "Retrieval Settings", "Advanced Settings"])
         
         with tab1:
             st.header("Your documents")
             pdf_docs = st.file_uploader(
-                "Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
+                "Upload your PDFs here and click on 'Process'", accept_multiple_files=True,
+                type=["pdf", "txt", "docx", "csv", "json"]  # Support more file types
+            )
+            
+            # Add info about unlimited file uploads
+            st.info("You can upload as many documents as needed. The only limitation is your system memory.")
+            
+            # Add option to clear uploaded files
+            if st.button("Clear Uploaded Files", key="clear_uploaded"):
+                st.session_state.uploaded_files = None
+                st.session_state.all_text_chunks = []
+                st.rerun()
             
             if st.button("Process"):
                 if pdf_docs:
@@ -482,23 +664,38 @@ def main():
 
                         # get the text chunks
                         text_chunks = get_text_chunks(raw_text)
+                        
+                        # Store all text chunks for hybrid search
+                        st.session_state.all_text_chunks = text_chunks
 
                         # create vector store
-                        vectorstore = get_vectorstore(text_chunks)
+                        vectorstore = get_vectorstore(
+                            text_chunks, 
+                            embedding_batch_size=st.session_state.embedding_batch_size, 
+                            use_performance_mode=st.session_state.use_performance_mode
+                        )
 
-                        # create conversation chain
-                        st.session_state.conversation = get_conversation_chain(vectorstore)
-                    
-                    st.success("Documents processed successfully!")
+                        try:
+                            # create conversation chain with appropriate retriever
+                            st.session_state.conversation = get_conversation_chain(vectorstore, text_chunks)
+                            st.success(f"✅ Successfully processed {len(pdf_docs)} documents with {len(text_chunks)} text chunks!")
+                        except Exception as e:
+                            st.error(f"Error creating conversation chain: {str(e)}")
+                            import traceback
+                            print(f"Error details: {traceback.format_exc()}")
+                            # Fallback to standard retriever if hybrid fails
+                            st.session_state.use_hybrid_search = False
+                            st.session_state.conversation = get_conversation_chain(vectorstore)
+                            st.success(f"✅ Documents processed! (using standard search) - {len(text_chunks)} text chunks created.")
                     
                     # Clear messages when new documents are processed
                     st.session_state.messages = []
                     st.session_state.messages.append({
                         "role": "assistant", 
-                        "content": "Documents processed! You can now ask questions about them."
+                        "content": f"Documents processed! You can now ask questions about your {len(pdf_docs)} document(s)."
                     })
                 else:
-                    st.error("Please upload at least one PDF file.")
+                    st.error("Please upload at least one document file.")
         
         with tab2:
             st.header("Web Search")
@@ -519,13 +716,13 @@ def main():
             # Advanced search options in an expander
             with st.expander("Advanced Search Options"):
                 if "max_results" not in st.session_state:
-                    st.session_state.max_results = 5
+                    st.session_state.max_results = 10  # Default to 10 now, not 5
                 st.session_state.max_results = st.slider(
                     "Max Results", 
                     min_value=1, 
-                    max_value=20, 
+                    max_value=30,  # Increased to Tavily's maximum of 30
                     value=st.session_state.max_results,
-                    help="Maximum number of search results to retrieve"
+                    help="Maximum number of search results to retrieve (up to 30)"
                 )
                 
                 if "include_answer" not in st.session_state:
@@ -555,6 +752,64 @@ def main():
                     format_func=lambda x: "Any time" if x is None else x.capitalize(),
                     help="Filter search results by recency"
                 )
+                
+                # Add domain inclusion/exclusion options
+                st.subheader("Domain Filters")
+                
+                # Initialize domain lists if not already in session state
+                if "include_domains" not in st.session_state:
+                    st.session_state.include_domains = []
+                if "exclude_domains" not in st.session_state:
+                    st.session_state.exclude_domains = []
+                    
+                # Temporary variables for domain input
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    include_domain = st.text_input(
+                        "Include Domain", 
+                        placeholder="e.g., example.com",
+                        help="Only include results from specific domains"
+                    )
+                    
+                    if st.button("Add Include Domain"):
+                        if include_domain and include_domain not in st.session_state.include_domains:
+                            st.session_state.include_domains.append(include_domain)
+                            st.rerun()
+                            
+                    if st.session_state.include_domains:
+                        st.write("Included domains:")
+                        for i, domain in enumerate(st.session_state.include_domains):
+                            col1_1, col1_2 = st.columns([4, 1])
+                            with col1_1:
+                                st.text(domain)
+                            with col1_2:
+                                if st.button("❌", key=f"del_include_{i}"):
+                                    st.session_state.include_domains.pop(i)
+                                    st.rerun()
+                
+                with col2:
+                    exclude_domain = st.text_input(
+                        "Exclude Domain", 
+                        placeholder="e.g., example.com",
+                        help="Exclude results from specific domains"
+                    )
+                    
+                    if st.button("Add Exclude Domain"):
+                        if exclude_domain and exclude_domain not in st.session_state.exclude_domains:
+                            st.session_state.exclude_domains.append(exclude_domain)
+                            st.rerun()
+                            
+                    if st.session_state.exclude_domains:
+                        st.write("Excluded domains:")
+                        for i, domain in enumerate(st.session_state.exclude_domains):
+                            col2_1, col2_2 = st.columns([4, 1])
+                            with col2_1:
+                                st.text(domain)
+                            with col2_2:
+                                if st.button("❌", key=f"del_exclude_{i}"):
+                                    st.session_state.exclude_domains.pop(i)
+                                    st.rerun()
             
             # Only show search input if web search isn't auto-enabled
             if not st.session_state.web_search_enabled:
@@ -606,7 +861,6 @@ def main():
                             if st.session_state.conversation:
                                 # Use the helper function to add to vectorstore
                                 add_search_results_to_vectorstore(content_texts, source_urls)
-                                st.success("Search results added to your knowledge base!")
                             else:
                                 # Create text chunks from search results
                                 search_text_chunks = []
@@ -624,15 +878,112 @@ def main():
                                             "type": "web_search"
                                         })
                                 
+                                # Store these chunks for hybrid search
+                                st.session_state.all_text_chunks = search_text_chunks
+                                
                                 # Create a new vectorstore with just the search results
-                                vectorstore = get_vectorstore(search_text_chunks)
+                                vectorstore = get_vectorstore(
+                                    search_text_chunks,
+                                    embedding_batch_size=st.session_state.embedding_batch_size,
+                                    use_performance_mode=st.session_state.use_performance_mode
+                                )
                                 
-                                # Create conversation chain
-                                st.session_state.conversation = get_conversation_chain(vectorstore)
-                                
-                                st.success("Created knowledge base from search results!")
+                                try:
+                                    # Create conversation chain with appropriate retriever
+                                    st.session_state.conversation = get_conversation_chain(vectorstore, search_text_chunks)
+                                    st.success("Created knowledge base from search results!")
+                                except Exception as e:
+                                    st.error(f"Error creating conversation chain: {str(e)}")
+                                    import traceback
+                                    print(f"Error details: {traceback.format_exc()}")
+                                    # Fallback to standard retriever if hybrid fails
+                                    st.session_state.use_hybrid_search = False
+                                    st.session_state.conversation = get_conversation_chain(vectorstore)
+                                    st.success("Created knowledge base from search results (using standard search)!")
         
         with tab3:
+            st.header("Retrieval Settings")
+            
+            # Hybrid search option
+            st.session_state.use_hybrid_search = st.checkbox(
+                "Use Hybrid Search", 
+                value=st.session_state.use_hybrid_search,
+                help="Combines semantic search (FAISS), keyword search (BM25), and contextual reranking"
+            )
+            
+            # If hybrid search is enabled, show additional settings
+            if st.session_state.use_hybrid_search:
+                # Number of documents to retrieve
+                st.session_state.retrieve_k = st.slider(
+                    "Number of documents to retrieve", 
+                    min_value=3, 
+                    max_value=50,  # Increased from 20 to 50
+                    value=st.session_state.retrieve_k,
+                    help="More documents means more context for the LLM but may cause slower responses"
+                )
+                
+                # Weight between semantic and keyword search
+                st.session_state.semantic_weight = st.slider(
+                    "Semantic Search Weight", 
+                    min_value=0.0, 
+                    max_value=1.0, 
+                    value=st.session_state.semantic_weight,
+                    help="Higher values favor semantic search (meaning), lower values favor BM25 (keywords)"
+                )
+                
+                # Option to enable contextual reranking
+                st.session_state.use_contextual_reranking = st.checkbox(
+                    "Use BART Contextual Reranking", 
+                    value=st.session_state.use_contextual_reranking,
+                    help="Uses BART model to rerank retrieved documents based on relevance to the query"
+                )
+                
+                # If retrieval settings are changed, update the conversation
+                if st.button("Apply Retrieval Settings"):
+                    if st.session_state.conversation and hasattr(st.session_state.conversation, 'retriever'):
+                        try:
+                            # Get the current vectorstore
+                            if hasattr(st.session_state.conversation.retriever, '_vectorstore'):
+                                # For hybrid retriever
+                                vectorstore = st.session_state.conversation.retriever._vectorstore
+                            elif hasattr(st.session_state.conversation.retriever, 'vectorstore'):
+                                # For some standard retrievers
+                                vectorstore = st.session_state.conversation.retriever.vectorstore
+                            else:
+                                # For FAISS vectorstore retriever
+                                vectorstore = st.session_state.conversation.retriever.vectorstore
+                            
+                            # Recreate conversation chain with current vectorstore and updated retrieval settings
+                            st.session_state.conversation = get_conversation_chain(
+                                vectorstore, 
+                                st.session_state.all_text_chunks
+                            )
+                            
+                            st.success("✅ Retrieval settings applied successfully!")
+                        except Exception as e:
+                            st.error(f"Error applying retrieval settings: {str(e)}")
+                            import traceback
+                            print(f"Error details: {traceback.format_exc()}")
+                    else:
+                        st.warning("No conversation chain to update. Please process documents first.")
+            else:
+                # Regular retrieval settings
+                st.session_state.retrieve_k = st.slider(
+                    "Number of documents to retrieve", 
+                    min_value=3, 
+                    max_value=50,  # Increased from 20 to 50
+                    value=st.session_state.retrieve_k,
+                    help="More documents means more context for the LLM but may cause slower responses"
+                )
+                
+                # Button to apply changes
+                if st.button("Apply Retrieval Settings"):
+                    if st.session_state.conversation and hasattr(st.session_state.conversation.retriever, "search_kwargs"):
+                        # Update the k parameter in the retriever
+                        st.session_state.conversation.retriever.search_kwargs["k"] = st.session_state.retrieve_k
+                        st.success("✅ Retrieval settings applied successfully!")
+        
+        with tab4:
             st.header("Advanced Settings")
             
             # Performance optimization options
@@ -650,6 +1001,16 @@ def main():
                     value=st.session_state.embedding_batch_size,
                     help="Larger batch sizes can speed up embedding but use more memory."
                 )
+            
+            # Source document display options
+            st.subheader("Source Document Settings")
+            
+            # Option to show summary of retrieved documents
+            st.session_state.show_source_summary = st.checkbox(
+                "Show document summary", 
+                value=st.session_state.show_source_summary,
+                help="Shows a summary of key information from retrieved documents."
+            )
             
             # Add a button to clear conversation history
             if st.button("Clear Conversation History"):
@@ -678,7 +1039,7 @@ def main():
                 with st.expander("Debug Information"):
                     st.subheader("Session State Variables")
                     for key, value in st.session_state.items():
-                        if key not in ["conversation", "chat_history", "messages", "search_results"]:
+                        if key not in ["conversation", "chat_history", "messages", "search_results", "all_text_chunks"]:
                             st.write(f"**{key}:** {value}")
                     
                     if st.session_state.conversation:
@@ -686,6 +1047,13 @@ def main():
                         st.write("Conversation chain is initialized")
                         st.write(f"Chain type: {st.session_state.conversation.chain_type if hasattr(st.session_state.conversation, 'chain_type') else 'Unknown'}")
                         st.write(f"Has memory: {hasattr(st.session_state.conversation, 'memory')}")
+                        st.write(f"Retriever type: {type(st.session_state.conversation.retriever).__name__ if hasattr(st.session_state.conversation, 'retriever') else 'Unknown'}")
+                        if st.session_state.use_hybrid_search:
+                            st.write(f"Using hybrid retriever with semantic weight: {st.session_state.semantic_weight}")
+                            st.write(f"BART reranking enabled: {st.session_state.use_contextual_reranking}")
+                    
+                    st.subheader("Text Chunks")
+                    st.write(f"Number of text chunks: {len(st.session_state.all_text_chunks)}")
 
 
 if __name__ == '__main__':
