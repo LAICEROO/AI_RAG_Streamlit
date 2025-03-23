@@ -12,11 +12,17 @@ def get_text_chunks(text):
     """
     Split text into chunks of appropriate size for embedding.
     
+    This function divides text into manageable chunks using these steps:
+    1. Initially breaks text into paragraphs
+    2. Processes each paragraph to ensure chunk size doesn't exceed limits (800-1000 chars)
+    3. For large paragraphs, splits into sentences 
+    4. Further splits oversized chunks using CharacterTextSplitter for maximum compatibility
+    
     Args:
         text (str): The text to split into chunks.
         
     Returns:
-        list: A list of text chunks.
+        list: A list of text chunks ready for embedding.
     """
     # First, break text into paragraphs
     paragraphs = text.split("\n\n")
@@ -86,12 +92,17 @@ def average_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     """
     Perform average pooling on the last hidden states from the model.
     
+    This creates a single vector representation from transformer outputs by:
+    1. Using the attention mask to zero out padding tokens
+    2. Computing a weighted average of all token embeddings
+    3. Normalizing by the sum of attention weights
+    
     Args:
-        last_hidden_states (Tensor): The last hidden states from the model.
-        attention_mask (Tensor): The attention mask for the input.
+        last_hidden_states (Tensor): The final layer hidden states from the transformer model
+        attention_mask (Tensor): Binary mask indicating which tokens are real vs padding
         
     Returns:
-        Tensor: The pooled representation.
+        Tensor: The pooled representation vector for the entire sequence
     """
     last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
     return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
@@ -100,8 +111,22 @@ def average_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
 class MultilangE5Embeddings(Embeddings):
     """
     A class for generating embeddings using the multilingual E5 model.
+    
+    This class implements LangChain's Embeddings interface to provide:
+    1. Multilingual embedding support via E5 (a powerful multilingual embedding model)
+    2. Batch processing for performance optimization
+    3. GPU acceleration when available
+    4. Proper formatting of inputs with instruct prefixes
+    5. Normalized embeddings for better similarity search
     """
     def __init__(self, model_name="intfloat/multilingual-e5-large-instruct", batch_size=8):
+        """
+        Initialize the E5 embeddings model with the specified parameters.
+        
+        Args:
+            model_name (str): HuggingFace model identifier for the embedding model
+            batch_size (int): Number of texts to process at once for better performance
+        """
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
@@ -114,11 +139,17 @@ class MultilangE5Embeddings(Embeddings):
         """
         Generate embeddings for a list of documents.
         
+        This method:
+        1. Formats texts with appropriate instruction prefix
+        2. Processes documents in batches to optimize memory usage
+        3. Handles tokenization, model inference, and pooling
+        4. Normalizes the resulting embeddings for cosine similarity
+        
         Args:
-            texts (list): A list of document texts.
+            texts (list): A list of document texts to embed
             
         Returns:
-            list: A list of embeddings.
+            list: A list of embedding vectors (one per input document)
         """
         # Pre-process texts to add instruction format
         task = "Represent this document for retrieval:"
@@ -156,11 +187,16 @@ class MultilangE5Embeddings(Embeddings):
         """
         Generate an embedding for a query.
         
+        Unlike document embedding, this method:
+        1. Uses a query-specific instruction format
+        2. Processes a single input (the query)
+        3. Returns a single normalized vector
+        
         Args:
-            text (str): The query text.
+            text (str): The query text to embed
             
         Returns:
-            list: The query embedding.
+            list: The query embedding vector
         """
         # Pre-process query to add instruction format
         task = "Represent this query for retrieval:"
@@ -186,10 +222,28 @@ class MultilangE5Embeddings(Embeddings):
     
     # Implement the callable interface that LangChain expects
     def embed_text(self, text):
+        """
+        Alias for embed_query to support LangChain's expected interface.
+        
+        Args:
+            text (str): The text to embed
+            
+        Returns:
+            list: The embedding vector
+        """
         return self.embed_query(text)
     
     # This makes the object callable directly
     def __call__(self, text):
+        """
+        Make the class instance directly callable.
+        
+        Args:
+            text (str): The text to embed
+            
+        Returns:
+            list: The embedding vector
+        """
         return self.embed_text(text)
 
 
@@ -197,13 +251,18 @@ def get_vectorstore(text_chunks, embedding_batch_size=8, use_performance_mode=Tr
     """
     Create a vector store from text chunks.
     
+    This function:
+    1. Initializes the embedding model with appropriate batch size
+    2. Creates a FAISS vector store with the specified text chunks
+    3. Applies performance optimization settings if enabled
+    
     Args:
-        text_chunks (list): A list of text chunks to embed.
-        embedding_batch_size (int, optional): The batch size for embedding. Defaults to 8.
-        use_performance_mode (bool, optional): Whether to use performance mode. Defaults to True.
+        text_chunks (list): A list of text chunks to embed
+        embedding_batch_size (int): The batch size for embedding generation
+        use_performance_mode (bool): Whether to optimize for performance
         
     Returns:
-        FAISS: A vector store containing the embeddings.
+        FAISS: A vector store containing the embeddings for efficient similarity search
     """
     from langchain_community.vectorstores import FAISS
     

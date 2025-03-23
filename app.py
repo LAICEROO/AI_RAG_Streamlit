@@ -22,7 +22,19 @@ from utils.hybrid_search import get_hybrid_retriever
 def get_pdf_text(uploaded_files):
     """
     Extract text from various document formats.
-    Supports PDF, TXT, DOCX, CSV, and JSON files.
+    
+    This function processes multiple document types:
+    1. PDF: Uses PyPDF2 to extract text from each page
+    2. TXT: Plain text files decoded with UTF-8
+    3. DOCX: Microsoft Word documents using python-docx
+    4. CSV: Tabular data using pandas
+    5. JSON: Structured data pretty-printed
+    
+    Args:
+        uploaded_files: List of Streamlit UploadedFile objects
+        
+    Returns:
+        str: Combined text content from all files, with appropriate spacing
     """
     text = ""
     
@@ -33,17 +45,17 @@ def get_pdf_text(uploaded_files):
         try:
             # Handle different file types
             if file_ext == 'pdf':
-                # Handle PDF files
+                # Handle PDF files using PyPDF2
                 pdf_reader = PdfReader(file)
                 for page in pdf_reader.pages:
                     text += page.extract_text() + "\n\n"
                     
             elif file_ext == 'txt':
-                # Handle text files
+                # Handle text files with UTF-8 decoding
                 text += file.getvalue().decode('utf-8') + "\n\n"
                 
             elif file_ext == 'docx':
-                # Handle DOCX files
+                # Handle DOCX files using python-docx (optional dependency)
                 try:
                     from docx import Document
                     doc = Document(file)
@@ -56,7 +68,7 @@ def get_pdf_text(uploaded_files):
                     continue
                     
             elif file_ext == 'csv':
-                # Handle CSV files
+                # Handle CSV files using pandas (optional dependency)
                 try:
                     import pandas as pd
                     df = pd.read_csv(file)
@@ -66,15 +78,17 @@ def get_pdf_text(uploaded_files):
                     continue
                     
             elif file_ext == 'json':
-                # Handle JSON files
+                # Handle JSON files with pretty-printing
                 import json
                 content = json.loads(file.getvalue().decode('utf-8'))
                 text += json.dumps(content, indent=2) + "\n\n"
                 
             else:
+                # Skip unsupported file types with a warning
                 st.warning(f"Unsupported file type: {file_ext} - {file.name} was skipped")
                 
         except Exception as e:
+            # Handle any errors during processing with detailed error reporting
             st.error(f"Error processing file {file.name}: {str(e)}")
             import traceback
             print(f"Error details for {file.name}: {traceback.format_exc()}")
@@ -84,6 +98,22 @@ def get_pdf_text(uploaded_files):
 
 
 def get_conversation_chain(vectorstore, text_chunks=None):
+    """
+    Create a conversation chain for RAG (Retrieval Augmented Generation) using Mistral AI.
+    
+    This function:
+    1. Initializes the LLM using Mistral AI API
+    2. Sets up conversation memory to maintain chat history
+    3. Creates an appropriate retriever (standard or hybrid) based on settings
+    4. Builds a conversational retrieval chain that combines all components
+    
+    Args:
+        vectorstore: Vector database containing document embeddings
+        text_chunks: Optional raw text chunks for hybrid search
+        
+    Returns:
+        ConversationalRetrievalChain: Chain that handles conversational RAG
+    """
     # Use Mistral AI directly
     api_key = os.environ["MISTRAL_API_KEY"]
     
@@ -91,9 +121,9 @@ def get_conversation_chain(vectorstore, text_chunks=None):
     llm = ChatMistralAI(
         model="mistral-small-latest",
         mistral_api_key=api_key,
-        temperature=0.3,
-        max_tokens=8192,
-        top_p=0.9
+        temperature=0.3,  # Lower temperature for more factual responses
+        max_tokens=16384,  # Large context window
+        top_p=0.9  # Slightly constrained sampling
     )
 
     # Use the updated memory API to avoid deprecation warnings
@@ -101,21 +131,23 @@ def get_conversation_chain(vectorstore, text_chunks=None):
     from langchain_core.runnables.history import RunnableWithMessageHistory
     from langchain_core.messages import HumanMessage, AIMessage
 
+    # Setup conversation memory to track chat history
     memory = ConversationBufferMemory(
-        memory_key='chat_history', 
-        return_messages=True, 
-        output_key='answer'
+        memory_key='chat_history',  # Key used to access history in prompt
+        return_messages=True,       # Return message objects, not strings
+        output_key='answer'         # Store AI responses under this key
     )
     
-    # Create hybrid retriever if text_chunks are provided
+    # Create hybrid retriever if text_chunks are provided and hybrid search is enabled
     if text_chunks and st.session_state.use_hybrid_search:
         try:
+            # Setup hybrid retriever with semantic search, BM25, and optional reranking
             retriever = get_hybrid_retriever(
                 vectorstore=vectorstore,
                 text_chunks=text_chunks,
-                k=st.session_state.retrieve_k,
-                semantic_weight=st.session_state.semantic_weight,
-                use_reranking=st.session_state.use_contextual_reranking
+                k=st.session_state.retrieve_k,                    # Number of documents to retrieve
+                semantic_weight=st.session_state.semantic_weight, # Balance between semantic and BM25
+                use_reranking=st.session_state.use_contextual_reranking  # Whether to rerank results
             )
             
             # Check if we got a HybridRetriever or a fallback retriever
@@ -126,20 +158,21 @@ def get_conversation_chain(vectorstore, text_chunks=None):
         except Exception as e:
             st.error(f"Error setting up hybrid search: {e}")
             st.warning("Falling back to standard vector search.")
+            # Fall back to standard vector retrieval if hybrid setup fails
             retriever = vectorstore.as_retriever(search_kwargs={"k": st.session_state.retrieve_k})
             st.session_state.use_hybrid_search = False
     else:
         # Use standard vectorstore retriever
         retriever = vectorstore.as_retriever(search_kwargs={"k": st.session_state.retrieve_k})
     
-    # Create the chain
+    # Create the chain that combines LLM, retriever, and memory
     conversation_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
         memory=memory,
-        verbose=True,
-        return_source_documents=True,
-        chain_type="stuff"
+        verbose=True,                  # Show debug info during execution
+        return_source_documents=True,  # Return the source docs for citation
+        chain_type="stuff"             # "Stuff" puts all docs in a single prompt
     )
     
     return conversation_chain
@@ -149,6 +182,11 @@ def generate_source_summary(source_documents):
     """
     Generate a summary from the retrieved source documents
     
+    This function analyzes documents to extract key terms and concepts for summary bullet points.
+    It uses different approaches based on detected language characteristics:
+    1. For Latin-script content (like English): Word-based term extraction
+    2. For non-Latin content (other languages): Character n-gram approach
+    
     Args:
         source_documents: List of document objects with page_content attribute
         
@@ -157,7 +195,7 @@ def generate_source_summary(source_documents):
     """
     # Extract all text from documents
     all_text = ""
-    for doc in source_documents[:5]:  # Limit to first 5 documents to avoid token limits
+    for doc in source_documents[:10]:  # Limit to first 10 documents to avoid token limits
         all_text += doc.page_content + "\n\n"
     
     # Generic identification of key concepts
@@ -176,16 +214,24 @@ def generate_source_summary(source_documents):
         
         # Get most frequent words that are reasonably long
         word_counts = Counter([w.lower() for w in words if len(w) > 3])
+        # This line filters the most common terms:
+        # 1. Get the 10 most common words using most_common(10)
+        # 2. Only keep terms that appear more than twice (count > 2)
+        # 3. Use list comprehension to extract just the terms (without counts)
         top_terms = [term for term, count in word_counts.most_common(10) if count > 2]
     else:
         # Standard approach for primarily Latin-script content
+        # Extract words that are likely meaningful (alphabetic, 4+ chars)
         words = re.findall(r'\b[A-Za-z][A-Za-z-]{3,15}\b', all_text)
+        # Filter out common stopwords that don't add meaning
         words = [word.lower() for word in words if word.lower() not in 
                 ['the', 'and', 'that', 'for', 'with', 'this', 'from', 'these', 'those', 
                 'their', 'there', 'what', 'when', 'where', 'which', 'while', 'would']]
         
-        # Get most common terms
+        # Get most common terms using Counter
         word_counts = Counter(words)
+        # Similar to above, but selecting 8 most common terms that appear more than twice
+        # This creates a list of just the term strings, not including their counts
         top_terms = [term for term, count in word_counts.most_common(8) if count > 2]
     
     # Generate generic bullet points if we found key terms
@@ -211,12 +257,28 @@ def generate_source_summary(source_documents):
     ]
 
 def handle_userinput(user_question):
+    """
+    Process user questions, optionally perform web search, and generate LLM responses.
+    
+    This complex function handles:
+    1. Optional web search to supplement document knowledge
+    2. Integration of web results with RAG system
+    3. Invoking the conversation chain with appropriate context
+    4. Displaying results and source documents to the user
+    5. Managing chat history and memory
+    
+    Args:
+        user_question: The user's input question
+    """
     web_context = ""
     web_sources = []
     
+    # Phase 1: Web Search Integration - Optionally perform web search to supplement document knowledge
     # Check if we should perform a web search alongside the document search
     if st.session_state.web_search_enabled and user_question:
         with st.spinner("Searching the web for additional context..."):
+            # Call Tavily search API to get real-time web information
+            # This extends our knowledge beyond the documents provided by the user
             search_results = perform_tavily_search(
                 query=user_question, 
                 search_depth=st.session_state.web_search_depth,
@@ -226,22 +288,23 @@ def handle_userinput(user_question):
                 time_range=st.session_state.time_range
             )
             
-            # If we got search results and they don't contain an error
+            # If we got valid search results (no errors), process them
             if search_results and "error" not in search_results:
-                # Extract web search answer and sources
+                # Extract the AI-generated summary of web results if available
                 if "answer" in search_results and search_results["answer"]:
                     web_context = search_results["answer"]
                 
-                # Extract web sources for citation
+                # Extract individual web sources for citation and display
                 if "results" in search_results and len(search_results["results"]) > 0:
                     for result in search_results["results"]:
                         web_sources.append({
                             "title": result.get("title", "No title"),
                             "url": result.get("url", "#"),
+                            # Truncate long content for display purposes
                             "content": result.get("content", "")[:150] + "..." if len(result.get("content", "")) > 150 else result.get("content", "")
                         })
                 
-                # Show the web search context to the user
+                # Display web search results to the user in an expandable section
                 with st.expander("Web Search Results", expanded=True):
                     if web_context:
                         st.write(web_context)
@@ -252,19 +315,23 @@ def handle_userinput(user_question):
                             st.markdown(f"**Source {i+1}:** [{source['title']}]({source['url']})")
                             st.markdown(f"_Preview:_ {source['content']}")
                 
-                # Always add web results to the vectorstore 
+                # Knowledge Integration: Add web results to the vectorstore for retrieval
+                # This ensures the RAG system can use this information for current and future queries
                 if "results" in search_results and st.session_state.conversation:
+                    # Extract content and URLs from search results
                     content_texts = [result.get("content", "") for result in search_results["results"] if "content" in result]
                     source_urls = [result.get("url", "") for result in search_results["results"] if "content" in result]
                     
                     if content_texts:
-                        # Add to vectorstore
+                        # Add web search results to vectorstore for retrieval
+                        # This allows the hybrid search to incorporate web results
                         add_search_results_to_vectorstore(content_texts, source_urls)
     
     try:
-        # Always use full integration mode for web results
+        # Decision point: Check if we have web search results to incorporate into the response
         if web_context and web_sources:
             # Format web information to be explicitly used by the LLM
+            # This creates a structured representation of web search results
             formatted_web_info = f"""
 Web search found the following information relevant to your question:
 
@@ -272,28 +339,55 @@ Web search found the following information relevant to your question:
 
 Sources:
 """
+            # Add all web sources with their URLs for proper citation
             for i, source in enumerate(web_sources):
                 formatted_web_info += f"{i+1}. {source['title']} - {source['url']}\n"
             
-            # Ensure the LLM uses this information
+            # PROMPT ENGINEERING: Enhanced instructions for the model when web search results are available
+            # This specific prompt construction addresses several key issues:
+            # 1. Establishes the assistant's role and behavior expectations
+            # 2. Explicitly prevents "I don't know" default responses 
+            # 3. Ensures the model prioritizes information from search results
+            # 4. Structures the input with clear delineation between query and search content
             enhanced_question = f"""
-{user_question}
+You are a helpful assistant that always uses information from search results to provide thorough answers. 
+You prioritize information from provided sources over your general knowledge.
+When information is available, never reply with just "I don't know" or "Nie wiem".
+
+User question: {user_question}
 
 Use the following information from a recent web search to help with your answer:
 {formatted_web_info}
 
-Please incorporate this web information into your response and cite sources when appropriate.
+IMPORTANT: Use this information to provide a complete answer. Never respond with just "I don't know" or "Nie wiem" if the information is available in these sources.
+Provide a thorough answer using the information above and cite sources when appropriate.
 """
         else:
-            enhanced_question = user_question
+            # PROMPT ENGINEERING: Instructions for when only document search is available (no web results)
+            # This alternative prompt handles the case where we rely solely on document retrieval:
+            # 1. Sets assistant expectations for document-based queries
+            # 2. Still prevents "I don't know" responses even without web search 
+            # 3. Encourages providing partial information even when exact answers aren't found
+            enhanced_question = f"""
+You are a helpful assistant that always tries to provide valuable information based on available documents.
+You should be resourceful and helpful rather than saying you don't know when asked a question.
+
+User question: {user_question}
+
+Please answer the question using information from the available documents.
+If the exact answer isn't found, provide relevant information you have, but DO NOT respond with only "I don't know" or "Nie wiem".
+"""
         
-        # Get response from conversation chain
+        # Send the enhanced question (with all the instructions and context) to the LLM
+        # The conversation chain will use its retriever to find relevant documents
+        # and incorporate them with the web search results we've provided
         response = st.session_state.conversation.invoke({'question': enhanced_question})
         
-        # Update chat history in session state - but with the original question
-        # Update the memory directly with original question
+        # Update chat history to show the original question rather than our enhanced prompt
+        # This keeps the conversation history clean and natural for the user
         if enhanced_question != user_question and hasattr(st.session_state.conversation, 'memory'):
             # Fix the memory to show the original question, not the enhanced one
+            # This ensures chat history appears natural to the user
             messages = st.session_state.conversation.memory.chat_memory.messages
             for i, msg in enumerate(messages):
                 if msg.type == 'human' and msg.content == enhanced_question:
@@ -351,10 +445,10 @@ Please incorporate this web information into your response and cite sources when
                             # Create a styled source box with better handling of multilingual content
                             st.markdown(
                                 f"""
-                                <div style="background-color: #777777; 
+                                <div style="background-color: #2e2e2e; 
                                             padding: 15px; 
                                             border-radius: 10px; 
-                                            border-left: 5px solid #4B9FEA; 
+                                            border-left: 5px solid #2e2e2e; 
                                             margin-bottom: 15px;
                                             font-family: 'Source Sans Pro', sans-serif;
                                             overflow-wrap: break-word;
@@ -423,60 +517,76 @@ def perform_tavily_search(query, search_depth="basic", max_results=10, include_a
     """
     Perform a search using the Tavily API with improved error handling and options.
     
+    This function integrates with Tavily's web search API to retrieve:
+    1. Relevant web pages based on the query
+    2. Optional AI-generated summaries of search results
+    3. Sources with metadata like titles and URLs
+    4. Configurable search options (depth, time range, etc.)
+    
     Args:
         query (str): The search query
-        search_depth (str): Either "basic" or "advanced" 
+        search_depth (str): Either "basic" (faster) or "advanced" (more thorough)
         max_results (int): Maximum number of results to return (up to 30)
         include_answer (bool): Whether to include an AI-generated answer
         include_images (bool): Whether to include images in the results
         time_range (str, optional): Time range for results ("day", "week", "month")
         
     Returns:
-        dict: The search results from Tavily
+        dict: The search results from Tavily containing answer and/or sources
     """
     url = "https://api.tavily.com/search"
     
-    # Ensure we have an API key
+    # API Key Validation - Ensure we have a valid API key from environment or session state
+    # This is crucial for the web search functionality to work properly
     api_key = os.environ.get("TAVILY_API_KEY") or st.session_state.get("TAVILY_API_KEY")
     if not api_key:
+        # Return error dictionary instead of raising exception to allow graceful fallback
         return {
             "error": "Tavily API key not found. Please set the TAVILY_API_KEY environment variable."
         }
     
-    # Prepare request payload
+    # Request Configuration - Prepare the search payload with all parameters
+    # This builds the complete request with appropriate options for the Tavily API
     payload = {
         "query": query,
-        "search_depth": search_depth,
-        "include_answer": include_answer,
-        "include_images": include_images,
-        "max_results": min(max_results, 30)  # Respect Tavily's limit of 30 results
+        "search_depth": search_depth,            # Controls search thoroughness vs. speed
+        "include_answer": include_answer,        # Whether to include AI-generated summary
+        "include_images": include_images,        # Whether to include image results
+        "max_results": min(max_results, 30)      # Respect Tavily's maximum limit
     }
     
-    # Add optional parameters if provided
+    # Add optional time range filter if specified
+    # This allows restricting results to recent content
     if time_range:
         payload["time_range"] = time_range
     
-    # Add advanced options available in Tavily API
-    # Include domains from which to include results
+    # Domain Filtering - Include only specified domains if configured
+    # This allows the user to focus search on specific websites
     if st.session_state.get("include_domains"):
         payload["include_domains"] = st.session_state.include_domains
         
-    # Include domains from which to exclude results    
+    # Domain Exclusion - Exclude specified domains if configured
+    # This allows the user to avoid certain websites in results
     if st.session_state.get("exclude_domains"):
         payload["exclude_domains"] = st.session_state.exclude_domains
     
+    # Set up API request headers with authentication
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
     try:
+        # Execute API Request - Make the actual call to Tavily search API
+        # This sends our configured query and retrieves search results
         response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()  # Raise an exception for HTTP errors
+        response.raise_for_status()  # Explicitly raise exceptions for HTTP errors
         
+        # Parse the JSON response from the API
         results = response.json()
         
-        # Log search information if in developer mode
+        # Debugging - Log detailed search information in developer mode
+        # This helps troubleshoot search-related issues
         if st.session_state.get("developer_mode"):
             print(f"Tavily search results - query: '{query}', results count: {len(results.get('results', []))}")
             if "answer" in results:
@@ -485,49 +595,76 @@ def perform_tavily_search(query, search_depth="basic", max_results=10, include_a
         return results
         
     except requests.exceptions.RequestException as e:
+        # Error Handling - Handle HTTP and API-specific errors
+        # This provides detailed error information for debugging
         error_message = f"Error during Tavily search: {e}"
         if hasattr(e, 'response') and e.response:
             try:
+                # Try to extract API error details from response
                 error_details = e.response.json()
                 error_message += f" - {error_details.get('message', 'No details')}"
             except:
+                # Fallback to HTTP status code if JSON parsing fails
                 error_message += f" - Status code: {e.response.status_code}"
         
+        # Display error to the user and return error information
         st.error(error_message)
         return {"error": error_message}
     except Exception as e:
+        # Catch-All Error Handler - For unexpected errors
+        # This ensures the function doesn't crash the application
         error_message = f"Unexpected error during Tavily search: {e}"
         st.error(error_message)
         return {"error": error_message}
 
 
 def add_search_results_to_vectorstore(content_texts, source_urls):
-    """Helper function to add search results to the vectorstore"""
+    """
+    Add web search results to the vectorstore for hybrid retrieval.
+    
+    This function:
+    1. Chunks web content into appropriate sizes
+    2. Creates metadata for each chunk with source tracking
+    3. Adds chunks to existing vectorstore (and BM25 if using hybrid search)
+    4. Updates the conversation chain with the new knowledge
+    
+    Args:
+        content_texts: List of text contents from search results
+        source_urls: List of URLs corresponding to each content text
+    """
+    # Initialization - Create containers for processed chunks and their metadata
     search_text_chunks = []
     metadata_list = []
     
+    # Content Processing - Process each search result and create chunks with metadata
     for i, (content, url) in enumerate(zip(content_texts, source_urls)):
-        # Chunk each search result individually to avoid oversized chunks
+        # Text Chunking - Split content into manageable chunks for embedding
+        # This is critical for proper semantic understanding and retrieval
         result_chunks = get_text_chunks(content)
         search_text_chunks.extend(result_chunks)
         
-        # Create metadata for each chunk
+        # Metadata Creation - Add source tracking to each chunk
+        # This ensures we can trace back to the original web sources
         for _ in result_chunks:
             metadata_list.append({
                 "source": f"Web search result: {url}",
                 "type": "web_search"
             })
     
+    # Only proceed if we have valid chunks to add
     if search_text_chunks:
         try:
+            # Vectorstore Integration - Two different approaches based on retriever type
             if st.session_state.use_hybrid_search and hasattr(st.session_state.conversation.retriever, 'add_texts'):
-                # For hybrid retriever, use its add_texts method which updates both vectorstore and BM25
+                # Hybrid Retriever Path - Update both vectorstore and BM25 in one operation
+                # This keeps semantic and keyword search capabilities in sync
                 st.session_state.conversation.retriever.add_texts(
                     texts=search_text_chunks,
                     metadatas=metadata_list
                 )
             else:
-                # Get the existing retriever's vectorstore
+                # Standard Retriever Path - Need to get the vectorstore and update it directly
+                # Determine which type of retriever we're using to access its vectorstore
                 if hasattr(st.session_state.conversation.retriever, '_vectorstore'):
                     # For hybrid retriever
                     existing_vectorstore = st.session_state.conversation.retriever._vectorstore
@@ -539,15 +676,17 @@ def add_search_results_to_vectorstore(content_texts, source_urls):
                     existing_vectorstore = st.session_state.conversation.retriever.vectorstore
                 
                 # Add the new texts to the existing vectorstore with metadata
+                # This updates the vector database with new knowledge
                 existing_vectorstore.add_texts(
                     texts=search_text_chunks,
                     metadatas=metadata_list
                 )
                 
-                # Recreate the conversation chain with the updated vectorstore
-                # For hybrid search, we need to pass the original text chunks
+                # Conversation Chain Update - Recreate with updated knowledge
+                # This ensures the new information is available for retrieval
                 if st.session_state.use_hybrid_search:
-                    # Update all_text_chunks with the new search results
+                    # For hybrid search, update all_text_chunks and recreate with both sources
+                    # This maintains the BM25 search capabilities alongside vector search
                     st.session_state.all_text_chunks.extend(search_text_chunks)
                     
                     st.session_state.conversation = get_conversation_chain(
@@ -555,10 +694,14 @@ def add_search_results_to_vectorstore(content_texts, source_urls):
                         search_text_chunks + st.session_state.all_text_chunks
                     )
                 else:
+                    # For standard search, just recreate with the updated vectorstore
                     st.session_state.conversation = get_conversation_chain(existing_vectorstore)
                     
+            # Success notification - Let the user know we've incorporated web results
             st.success("Search results added to your knowledge base!")
         except Exception as e:
+            # Error Handling - Report issues with adding to knowledge base
+            # This helps troubleshoot when integration fails
             st.error(f"Error adding search results to knowledge base: {str(e)}")
             import traceback
             print(f"Error details: {traceback.format_exc()}")
@@ -655,7 +798,7 @@ def main():
                 st.session_state.uploaded_files = None
                 st.session_state.all_text_chunks = []
                 st.rerun()
-            
+        
             if st.button("Process"):
                 if pdf_docs:
                     with st.spinner("Processing documents..."):
@@ -687,7 +830,7 @@ def main():
                             st.session_state.use_hybrid_search = False
                             st.session_state.conversation = get_conversation_chain(vectorstore)
                             st.success(f"✅ Documents processed! (using standard search) - {len(text_chunks)} text chunks created.")
-                    
+                
                     # Clear messages when new documents are processed
                     st.session_state.messages = []
                     st.session_state.messages.append({

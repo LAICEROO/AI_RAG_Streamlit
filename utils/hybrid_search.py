@@ -14,7 +14,14 @@ class HybridRetriever(BaseRetriever):
     A hybrid retriever that combines semantic search (FAISS), BM25, and contextual retrieval.
     
     This implements the approach described in Anthropic's Contextual Retrieval research paper,
-    using a two-stage retrieval process with reranking.
+    using a two-stage retrieval process with reranking:
+    1. First stage: Combined keyword (BM25) and semantic (FAISS) search
+    2. Second stage: Contextual reranking using BART model
+    
+    The hybrid approach helps balance the strengths of different retrieval methods:
+    - BM25: Good for exact keyword matching
+    - Semantic search: Better at understanding meaning and context
+    - Reranking: Improves relevance by considering query-document relationships
     """
     
     def __init__(
@@ -97,14 +104,32 @@ class HybridRetriever(BaseRetriever):
     
     @property
     def vectorstore(self):
+        """
+        Access the vector store used for semantic search.
+        
+        Returns:
+            The vector store object
+        """
         return self._vectorstore
         
     @property
     def k(self):
+        """
+        Access the number of documents to retrieve.
+        
+        Returns:
+            int: Number of documents to retrieve
+        """
         return self._k
         
     @property
     def alpha(self):
+        """
+        Access the weight assigned to semantic search.
+        
+        Returns:
+            float: Weight between 0 and 1 (0 = only BM25, 1 = only semantic)
+        """
         return self._alpha
     
     def _get_relevant_documents(
@@ -113,12 +138,17 @@ class HybridRetriever(BaseRetriever):
         """
         Get documents relevant to the query.
         
+        This is the main retrieval method that:
+        1. Performs first-stage retrieval using ensemble of BM25 and semantic search
+        2. Optionally applies second-stage contextual reranking
+        3. Returns the top-k most relevant documents
+        
         Args:
             query: The query string
-            run_manager: Callback manager
+            run_manager: Callback manager for LangChain
             
         Returns:
-            List of relevant documents
+            List of relevant documents ordered by relevance
         """
         try:
             # First-stage retrieval using ensemble of BM25 and semantic search
@@ -151,12 +181,17 @@ class HybridRetriever(BaseRetriever):
         """
         Rerank documents using BART model for contextual relevance.
         
+        This second-stage ranking:
+        1. Gets relevance scores from BART model for each document
+        2. Sorts documents by these relevance scores
+        3. Returns documents in the new, reranked order
+        
         Args:
             query: The query string
-            docs: List of candidate documents
+            docs: List of candidate documents from first-stage retrieval
             
         Returns:
-            Reranked list of documents
+            Reranked list of documents ordered by contextual relevance
         """
         try:
             # Prepare inputs for the BART model
@@ -180,12 +215,17 @@ class HybridRetriever(BaseRetriever):
         """
         Get relevance scores from BART-large-CNN model via Hugging Face Inference API.
         
+        This uses a clever approach:
+        1. Uses BART's summarization capability as a proxy for relevance
+        2. Compares the generated summary with the query
+        3. Calculates similarity between summary and query to determine relevance
+        
         Args:
             query: The query string
             documents: List of document texts
             
         Returns:
-            List of relevance scores
+            List of relevance scores for each document
         """
         if not self._hf_api_key:
             # If no API key, use a simple keyword-based relevance score instead
@@ -243,7 +283,22 @@ class HybridRetriever(BaseRetriever):
         return scores
         
     def _calculate_similarity_score(self, query: str, summary: str, doc: str) -> float:
-        """Calculate a combined similarity score between query and document summary"""
+        """
+        Calculate a combined similarity score between query and document summary.
+        
+        This method:
+        1. Calculates Jaccard similarity between query and summary
+        2. Calculates keyword presence ratio from query to document
+        3. Combines both scores with appropriate weights
+        
+        Args:
+            query: Search query string
+            summary: BART-generated summary
+            doc: Original document text
+            
+        Returns:
+            float: Combined similarity score (0-1)
+        """
         # Get query words (excluding common words)
         query_words = set(w.lower() for w in query.split() 
                         if len(w) > 3 and w.lower() not in 
@@ -277,14 +332,39 @@ class HybridRetriever(BaseRetriever):
         return (0.7 * jaccard_score) + (0.3 * query_term_ratio)
         
     def _get_keyword_similarity_scores(self, query: str, documents: List[str]) -> List[float]:
-        """Simple keyword-based fallback scoring method"""
+        """
+        Simple keyword-based fallback scoring method.
+        
+        This is used when the BART API is not available or fails.
+        
+        Args:
+            query: The search query string
+            documents: List of document texts
+            
+        Returns:
+            List of keyword similarity scores for each document
+        """
         scores = []
         for doc in documents:
             scores.append(self._get_keyword_similarity_score(query, doc))
         return scores
         
     def _get_keyword_similarity_score(self, query: str, document: str) -> float:
-        """Calculate simple keyword similarity between query and document"""
+        """
+        Calculate simple keyword similarity between query and document.
+        
+        This method:
+        1. Detects if query contains non-Latin characters (for multilingual support)
+        2. Uses either character trigrams (for non-Latin scripts) or word-based matching
+        3. Calculates overlap between query and document
+        
+        Args:
+            query: Search query string
+            document: Document text
+            
+        Returns:
+            float: Similarity score (0-1)
+        """
         # Try to detect query language to adjust tokenization approach
         try:
             import re
@@ -348,12 +428,17 @@ class HybridRetriever(BaseRetriever):
         """
         Add new texts to both the vector store and BM25 retriever.
         
+        This method:
+        1. Adds texts to the vectorstore for semantic search
+        2. Updates the BM25 retriever with the new texts
+        3. Recreates the ensemble retriever with the updated components
+        
         Args:
             texts: List of text strings to add
             metadatas: Optional metadata for each text
             
         Returns:
-            List of IDs of the added texts
+            List of IDs of the added texts from the vectorstore
         """
         try:
             # Add to vectorstore
@@ -400,6 +485,11 @@ def get_hybrid_retriever(
     """
     Create a hybrid retriever combining semantic search, BM25, and contextual reranking.
     
+    This factory function:
+    1. Creates a HybridRetriever with the specified parameters
+    2. Handles errors and provides fallback to standard retrieval if needed
+    3. Configures the retriever with appropriate API keys and settings
+    
     Args:
         vectorstore: The FAISS vector store for semantic search
         text_chunks: The list of text chunks for BM25 indexing
@@ -408,7 +498,7 @@ def get_hybrid_retriever(
         use_reranking: Whether to use BART for reranking
         
     Returns:
-        A HybridRetriever instance
+        A HybridRetriever instance or fallback standard retriever
     """
     try:
         # Get Hugging Face API key from environment or session state
