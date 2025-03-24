@@ -8,15 +8,15 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 import streamlit as st
 import os
+from openai import OpenAI
 
 class HybridRetriever(BaseRetriever):
     """
     A hybrid retriever that combines semantic search (FAISS), BM25, and contextual retrieval.
     
-    This implements the approach described in Anthropic's Contextual Retrieval research paper,
-    using a two-stage retrieval process with reranking:
+    This implements a two-stage retrieval process with reranking:
     1. First stage: Combined keyword (BM25) and semantic (FAISS) search
-    2. Second stage: Contextual reranking using BART model
+    2. Second stage: Contextual reranking using GPT-4o-mini model
     
     The hybrid approach helps balance the strengths of different retrieval methods:
     - BM25: Good for exact keyword matching
@@ -31,7 +31,7 @@ class HybridRetriever(BaseRetriever):
         k: int = 10,
         alpha: float = 0.5,
         use_reranking: bool = True,
-        hf_api_key: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
         rerank_top_k: int = 20
     ):
         """
@@ -42,8 +42,8 @@ class HybridRetriever(BaseRetriever):
             texts: The raw text documents for BM25 indexing
             k: Number of documents to retrieve
             alpha: Weight for combining results (0 = only BM25, 1 = only semantic)
-            use_reranking: Whether to use BART for contextual reranking
-            hf_api_key: Hugging Face API key for BART model
+            use_reranking: Whether to use GPT-4o-mini for contextual reranking
+            openai_api_key: OpenAI API key for GPT-4o-mini model
             rerank_top_k: How many documents to rerank (higher = better but slower)
         """
         # Initialize the parent class
@@ -54,8 +54,14 @@ class HybridRetriever(BaseRetriever):
         self._k = k
         self._alpha = alpha
         self._use_reranking = use_reranking
-        self._hf_api_key = hf_api_key or os.environ.get("HUGGINGFACEHUB_API_TOKEN") or st.session_state.get("HUGGINGFACEHUB_API_TOKEN")
-        self._rerank_top_k = min(rerank_top_k, k * 2)  # Don't rerank more than necessary
+        self._openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY") or st.session_state.get("OPENAI_API_KEY")
+        self._rerank_top_k = min(rerank_top_k, k * 2)
+        
+        # Initialize OpenAI client if reranking is enabled
+        if self._use_reranking and self._openai_api_key:
+            self._openai_client = OpenAI(api_key=self._openai_api_key)
+        else:
+            self._openai_client = None
         
         # Create BM25 retriever from texts
         try:
@@ -159,15 +165,15 @@ class HybridRetriever(BaseRetriever):
                 docs = self._vectorstore.as_retriever(search_kwargs={"k": self._k}).get_relevant_documents(query)
             
             # If reranking is disabled, return the ensemble results
-            if not self._use_reranking or not self._hf_api_key:
+            if not self._use_reranking or not self._openai_api_key:
                 return docs[:self._k]
             
             # For reranking, get more initial candidates to then filter down
             if len(docs) > self._rerank_top_k:
                 docs = docs[:self._rerank_top_k]
             
-            # Second-stage: perform contextual reranking with BART
-            reranked_docs = self._rerank_with_bart(query, docs)
+            # Second-stage: perform contextual reranking with GPT-4o-mini
+            reranked_docs = self._rerank_with_gpt4o(query, docs)
             
             # Return the specified number of top documents
             return reranked_docs[:self._k]
@@ -177,12 +183,12 @@ class HybridRetriever(BaseRetriever):
             # Fallback to just vector search if there's an error
             return self._vectorstore.as_retriever(search_kwargs={"k": self._k}).get_relevant_documents(query)
     
-    def _rerank_with_bart(self, query: str, docs: List[Document]) -> List[Document]:
+    def _rerank_with_gpt4o(self, query: str, docs: List[Document]) -> List[Document]:
         """
-        Rerank documents using BART model for contextual relevance.
+        Rerank documents using GPT-4o-mini model for contextual relevance.
         
         This second-stage ranking:
-        1. Gets relevance scores from BART model for each document
+        1. Gets relevance scores from GPT-4o-mini model for each document
         2. Sorts documents by these relevance scores
         3. Returns documents in the new, reranked order
         
@@ -194,9 +200,9 @@ class HybridRetriever(BaseRetriever):
             Reranked list of documents ordered by contextual relevance
         """
         try:
-            # Prepare inputs for the BART model
+            # Prepare inputs for the GPT-4o-mini model
             doc_texts = [doc.page_content for doc in docs]
-            doc_scores = self._get_bart_scores(query, doc_texts)
+            doc_scores = self._get_gpt4o_scores(query, doc_texts)
             
             # Create document-score pairs and sort by score
             doc_score_pairs = list(zip(docs, doc_scores))
@@ -207,18 +213,17 @@ class HybridRetriever(BaseRetriever):
             
             return reranked_docs
         except Exception as e:
-            st.warning(f"Error during BART reranking: {str(e)}. Using original ranking.")
-            print(f"Error during BART reranking: {str(e)}")
+            st.warning(f"Error during GPT-4o-mini reranking: {str(e)}. Using original ranking.")
+            print(f"Error during GPT-4o-mini reranking: {str(e)}")
             return docs
     
-    def _get_bart_scores(self, query: str, documents: List[str]) -> List[float]:
+    def _get_gpt4o_scores(self, query: str, documents: List[str]) -> List[float]:
         """
-        Get relevance scores from BART-large-CNN model via Hugging Face Inference API.
+        Get relevance scores from GPT-4o-mini model via OpenAI API.
         
-        This uses a clever approach:
-        1. Uses BART's summarization capability as a proxy for relevance
-        2. Compares the generated summary with the query
-        3. Calculates similarity between summary and query to determine relevance
+        This uses a direct relevance scoring approach:
+        1. Asks GPT-4o-mini to evaluate document relevance to query
+        2. Returns normalized relevance scores for ranking
         
         Args:
             query: The query string
@@ -227,50 +232,53 @@ class HybridRetriever(BaseRetriever):
         Returns:
             List of relevance scores for each document
         """
-        if not self._hf_api_key:
-            # If no API key, use a simple keyword-based relevance score instead
+        if not self._openai_client:
+            # If no API client, use a simple keyword-based relevance score instead
             return self._get_keyword_similarity_scores(query, documents)
             
-        API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-        headers = {"Authorization": f"Bearer {self._hf_api_key}"}
-        
         scores = []
         
         for doc in documents:
             # Truncate long documents for API limits
-            doc_truncated = doc[:1024] if len(doc) > 1024 else doc
+            doc_truncated = doc[:2048] if len(doc) > 2048 else doc
             
             # Skip empty documents
             if not doc_truncated.strip():
                 scores.append(0.0)
                 continue
                 
-            # Format for summarization task - use summarization as proxy for relevance
-            # The intuition is that if BART can produce a good summary that matches the query,
-            # then the document is relevant to the query
-            payload = {
-                "inputs": doc_truncated,
-                "parameters": {
-                    "max_length": 100,
-                    "min_length": 30,
-                    "do_sample": False
-                }
-            }
-            
             try:
-                response = requests.post(API_URL, headers=headers, json=payload)
-                response.raise_for_status()
+                # Format prompt for relevance scoring
+                prompt = f"""Rate the relevance of this document to the query on a scale of 0-10.
+                Query: {query}
+                Document: {doc_truncated}
+                Score (0-10):"""
                 
-                # Extract the generated summary
-                summary = response.json()[0].get("summary_text", "")
+                # Get relevance score from GPT-4o-mini
+                completion = self._openai_client.chat.completions.create(
+                    model="gpt-4o-mini-2024-07-18",
+                    messages=[{
+                        "role": "user",
+                        "content": prompt
+                    }],
+                    max_tokens=5,
+                    temperature=0.0
+                )
                 
-                # Use a combination of Jaccard similarity and keyword overlap for better relevance measure
-                score = self._calculate_similarity_score(query, summary, doc_truncated)
+                # Extract the score from the response
+                try:
+                    score = float(completion.choices[0].message.content.strip())
+                    # Normalize score to 0-1 range
+                    score = max(0.0, min(10.0, score)) / 10.0
+                except (ValueError, TypeError):
+                    # If we can't parse the score, use keyword similarity as fallback
+                    score = self._get_keyword_similarity_score(query, doc)
+                
                 scores.append(score)
                 
             except Exception as e:
                 # If API fails, use keyword similarity as fallback
-                print(f"BART API error: {str(e)}")
+                print(f"GPT-4o-mini API error: {str(e)}")
                 fallback_score = self._get_keyword_similarity_score(query, doc)
                 scores.append(fallback_score)
         
@@ -335,7 +343,7 @@ class HybridRetriever(BaseRetriever):
         """
         Simple keyword-based fallback scoring method.
         
-        This is used when the BART API is not available or fails.
+        This is used when the GPT-4o-mini API is not available or fails.
         
         Args:
             query: The search query string
@@ -495,14 +503,14 @@ def get_hybrid_retriever(
         text_chunks: The list of text chunks for BM25 indexing
         k: Number of documents to retrieve
         semantic_weight: Weight for semantic search (0-1)
-        use_reranking: Whether to use BART for reranking
+        use_reranking: Whether to use GPT-4o-mini for reranking
         
     Returns:
         A HybridRetriever instance or fallback standard retriever
     """
     try:
-        # Get Hugging Face API key from environment or session state
-        hf_api_key = os.environ.get("HUGGINGFACEHUB_API_TOKEN") or st.session_state.get("HUGGINGFACEHUB_API_TOKEN")
+        # Get OpenAI API key from environment or session state
+        openai_api_key = os.environ.get("OPENAI_API_KEY") or st.session_state.get("OPENAI_API_KEY")
         
         # Create and return the hybrid retriever
         return HybridRetriever(
@@ -511,7 +519,7 @@ def get_hybrid_retriever(
             k=k,
             alpha=semantic_weight,
             use_reranking=use_reranking,
-            hf_api_key=hf_api_key,
+            openai_api_key=openai_api_key,
             rerank_top_k=min(20, k * 2)  # Rerank at most 20 docs or 2*k, whichever is smaller
         )
     except Exception as e:

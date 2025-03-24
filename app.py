@@ -304,19 +304,6 @@ def handle_userinput(user_question):
                             "content": result.get("content", "")[:150] + "..." if len(result.get("content", "")) > 150 else result.get("content", "")
                         })
                 
-                # Display web search results to the user in an expandable section
-                with st.expander("Web Search Results", expanded=True):
-                    if web_context:
-                        st.write(web_context)
-                    
-                    if web_sources:
-                        st.markdown("### Sources:")
-                        for i, source in enumerate(web_sources):
-                            st.markdown(f"**Source {i+1}:** [{source['title']}]({source['url']})")
-                            st.markdown(f"_Preview:_ {source['content']}")
-                
-                # Knowledge Integration: Add web results to the vectorstore for retrieval
-                # This ensures the RAG system can use this information for current and future queries
                 if "results" in search_results and st.session_state.conversation:
                     # Extract content and URLs from search results
                     content_texts = [result.get("content", "") for result in search_results["results"] if "content" in result]
@@ -404,109 +391,6 @@ If the exact answer isn't found, provide relevant information you have, but DO N
             else:
                 st.session_state.messages.append({"role": "assistant", "content": message.content})
                 
-        # Display source documents if available - improved styling and multilingual support
-        if 'source_documents' in response and response['source_documents']:
-            # Generate a summary of retrieved documents if option is enabled
-            if st.session_state.show_source_summary:
-                # Generate dynamic summary based on document content
-                bullet_points = generate_source_summary(response['source_documents'])
-                
-                # Display a combined summary before showing individual sources
-                with st.expander("Retrieved Documents Summary", expanded=True):
-                    st.info("Below is a summary of the key information found in the retrieved documents:")
-                    
-                    # Display dynamic bullet points
-                    for point in bullet_points:
-                        st.markdown(f"- {point}")
-            
-            # Show individual sources
-            with st.expander("Document Sources", expanded=True):
-                # Create a container for sources to improve layout
-                sources_container = st.container()
-                
-                with sources_container:
-                    for i, doc in enumerate(response['source_documents']):
-                        source_box = st.container()
-                        
-                        with source_box:
-                            st.markdown(f"#### Source {i+1}")
-                            
-                            # Format content for better readability
-                            content = doc.page_content
-                            
-                            # Escape HTML to prevent rendering issues with special characters
-                            import html
-                            escaped_content = html.escape(content)
-                            
-                            # Handle very long content with truncation and expandable view
-                            is_long_content = len(content) > 1000
-                            display_content = escaped_content[:1000] + "..." if is_long_content else escaped_content
-                            
-                            # Create a styled source box with better handling of multilingual content
-                            st.markdown(
-                                f"""
-                                <div style="background-color: #2e2e2e; 
-                                            padding: 15px; 
-                                            border-radius: 10px; 
-                                            border-left: 5px solid #2e2e2e; 
-                                            margin-bottom: 15px;
-                                            font-family: 'Source Sans Pro', sans-serif;
-                                            overflow-wrap: break-word;
-                                            word-wrap: break-word;
-                                            white-space: pre-wrap;">
-                                    {display_content}
-                                </div>
-                                """, 
-                                unsafe_allow_html=True
-                            )
-                            
-                            # Add expandable section for viewing full content if truncated
-                            if is_long_content:
-                                with st.expander("View full content"):
-                                    st.markdown(
-                                        f"""
-                                        <div style="background-color: #f8f9fa; 
-                                                    padding: 10px; 
-                                                    border-radius: 5px;
-                                                    overflow-wrap: break-word;
-                                                    word-wrap: break-word;
-                                                    white-space: pre-wrap;">
-                                            {escaped_content}
-                                        </div>
-                                        """, 
-                                        unsafe_allow_html=True
-                                    )
-                            
-                            # Display source metadata in a cleaner format
-                            if hasattr(doc, 'metadata') and doc.metadata:
-                                metadata_html = ""
-                                
-                                if 'source' in doc.metadata:
-                                    source_text = doc.metadata['source']
-                                    # Truncate extremely long sources
-                                    if len(source_text) > 200:
-                                        source_text = source_text[:197] + "..."
-                                    metadata_html += f"<span style='font-weight: bold;'>Source:</span> {html.escape(source_text)}<br>"
-                                elif 'url' in doc.metadata:
-                                    url = doc.metadata['url']
-                                    # Ensure URL is properly formatted
-                                    if len(url) > 100:
-                                        displayed_url = url[:97] + "..."
-                                    else:
-                                        displayed_url = url
-                                    metadata_html += f"<span style='font-weight: bold;'>URL:</span> <a href='{html.escape(url)}' target='_blank'>{html.escape(displayed_url)}</a><br>"
-                                
-                                if metadata_html:
-                                    st.markdown(
-                                        f"""
-                                        <div style="margin-top: 5px; margin-bottom: 20px; font-size: 14px;">
-                                            {metadata_html}
-                                        </div>
-                                        """, 
-                                        unsafe_allow_html=True
-                                    )
-                            
-                            st.divider()
     except Exception as e:
         st.error(f"Error processing your question: {str(e)}")
         import traceback
@@ -1076,9 +960,9 @@ def main():
                 
                 # Option to enable contextual reranking
                 st.session_state.use_contextual_reranking = st.checkbox(
-                    "Use BART Contextual Reranking", 
+                    "Use GPT-4o mini Contextual Reranking", 
                     value=st.session_state.use_contextual_reranking,
-                    help="Uses BART model to rerank retrieved documents based on relevance to the query"
+                    help="Uses GPT 4o-mini model to rerank retrieved documents based on relevance to the query"
                 )
                 
                 # If retrieval settings are changed, update the conversation
@@ -1193,7 +1077,7 @@ def main():
                         st.write(f"Retriever type: {type(st.session_state.conversation.retriever).__name__ if hasattr(st.session_state.conversation, 'retriever') else 'Unknown'}")
                         if st.session_state.use_hybrid_search:
                             st.write(f"Using hybrid retriever with semantic weight: {st.session_state.semantic_weight}")
-                            st.write(f"BART reranking enabled: {st.session_state.use_contextual_reranking}")
+                            st.write(f"GPT-4o mini reranking enabled: {st.session_state.use_contextual_reranking}")
                     
                     st.subheader("Text Chunks")
                     st.write(f"Number of text chunks: {len(st.session_state.all_text_chunks)}")
