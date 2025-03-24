@@ -178,84 +178,6 @@ def get_conversation_chain(vectorstore, text_chunks=None):
     return conversation_chain
 
 
-def generate_source_summary(source_documents):
-    """
-    Generate a summary from the retrieved source documents
-    
-    This function analyzes documents to extract key terms and concepts for summary bullet points.
-    It uses different approaches based on detected language characteristics:
-    1. For Latin-script content (like English): Word-based term extraction
-    2. For non-Latin content (other languages): Character n-gram approach
-    
-    Args:
-        source_documents: List of document objects with page_content attribute
-        
-    Returns:
-        List of bullet points summarizing key information
-    """
-    # Extract all text from documents
-    all_text = ""
-    for doc in source_documents[:10]:  # Limit to first 10 documents to avoid token limits
-        all_text += doc.page_content + "\n\n"
-    
-    # Generic identification of key concepts
-    import re
-    from collections import Counter
-    
-    # Check if text contains significant non-Latin characters (likely non-English)
-    non_latin_chars = re.findall(r'[^\x00-\x7F]', all_text)
-    is_non_latin = len(non_latin_chars) > len(all_text) * 0.05  # If >5% non-Latin
-    
-    # Different approach based on detected language characteristics
-    if is_non_latin:
-        # For non-Latin scripts or multilingual content, try character n-gram approach
-        # Extract word-like sequences that might be terms in any language
-        words = re.findall(r'\b\w+\b', all_text)
-        
-        # Get most frequent words that are reasonably long
-        word_counts = Counter([w.lower() for w in words if len(w) > 3])
-        # This line filters the most common terms:
-        # 1. Get the 10 most common words using most_common(10)
-        # 2. Only keep terms that appear more than twice (count > 2)
-        # 3. Use list comprehension to extract just the terms (without counts)
-        top_terms = [term for term, count in word_counts.most_common(10) if count > 2]
-    else:
-        # Standard approach for primarily Latin-script content
-        # Extract words that are likely meaningful (alphabetic, 4+ chars)
-        words = re.findall(r'\b[A-Za-z][A-Za-z-]{3,15}\b', all_text)
-        # Filter out common stopwords that don't add meaning
-        words = [word.lower() for word in words if word.lower() not in 
-                ['the', 'and', 'that', 'for', 'with', 'this', 'from', 'these', 'those', 
-                'their', 'there', 'what', 'when', 'where', 'which', 'while', 'would']]
-        
-        # Get most common terms using Counter
-        word_counts = Counter(words)
-        # Similar to above, but selecting 8 most common terms that appear more than twice
-        # This creates a list of just the term strings, not including their counts
-        top_terms = [term for term, count in word_counts.most_common(8) if count > 2]
-    
-    # Generate generic bullet points if we found key terms
-    if top_terms:
-        bullets = []
-        if len(top_terms) >= 1:
-            bullets.append(f"The documents primarily discuss **{top_terms[0]}** and related concepts.")
-        if len(top_terms) >= 3:
-            bullets.append(f"Key topics include **{top_terms[0]}**, **{top_terms[1]}**, and **{top_terms[2]}**.")
-        if len(top_terms) >= 5:
-            bullets.append(f"Additional topics covered: **{top_terms[3]}** and **{top_terms[4]}**.")
-        bullets.append("The information includes definitions, explanations, and technical details on these subjects.")
-        bullets.append("Several sources provide complementary perspectives on these topics.")
-        return bullets
-    
-    # Fallback generic summary if no key terms found
-    return [
-        "The retrieved documents contain information related to your query.",
-        "Multiple sources provide different perspectives and details on the topic.",
-        "The content includes definitions, explanations, and technical specifications.",
-        "Some sources may include academic or research perspectives.",
-        "Consider reviewing the individual sources for more specific information."
-    ]
-
 def handle_userinput(user_question):
     """
     Process user questions, optionally perform web search, and generate LLM responses.
@@ -623,8 +545,6 @@ def main():
         st.session_state.semantic_weight = 0.7
     if "use_contextual_reranking" not in st.session_state:
         st.session_state.use_contextual_reranking = True
-    if "show_source_summary" not in st.session_state:
-        st.session_state.show_source_summary = True
     
     # Set default values for removed UI elements
     st.session_state.auto_add_search_results = True
@@ -1028,16 +948,6 @@ def main():
                     value=st.session_state.embedding_batch_size,
                     help="Larger batch sizes can speed up embedding but use more memory."
                 )
-            
-            # Source document display options
-            st.subheader("Source Document Settings")
-            
-            # Option to show summary of retrieved documents
-            st.session_state.show_source_summary = st.checkbox(
-                "Show document summary", 
-                value=st.session_state.show_source_summary,
-                help="Shows a summary of key information from retrieved documents."
-            )
             
             # Add a button to clear conversation history
             if st.button("Clear Conversation History"):
