@@ -1,234 +1,143 @@
-# AI_RAG with streamlit
-The AI RAG Assistant is a Streamlit-based application that allows users to interact with uploaded PDF documents through natural language queries. By leveraging embedding models and a question-answering model, the application retrieves context from the uploaded PDFs to provide accurate and context-aware answers.
+# AI RAG with Streamlit
 
-![image](https://github.com/user-attachments/assets/1e88d87a-ff5c-4cfa-923c-be669f784b64)
+A powerful Retrieval Augmented Generation (RAG) application built with Streamlit that combines document processing, hybrid search, and web search capabilities. This application allows users to chat with their documents while leveraging both local knowledge and real-time web information.
 
 ## 🌟 Features
 
-- **PDF Document Processing**: Upload and process multiple PDF files
-- **Semantic Search**: Uses FAISS for efficient similarity search
-- **Context-Aware Responses**: Generates answers based on document context
-- **Chat History**: Maintains conversation history for better context
-- **GPU Acceleration**: Supports CUDA for faster processing
-- **User-Friendly Interface**: Clean and intuitive Streamlit UI
+### Document Processing
+- Support for multiple document formats:
+  - PDF files
+  - Text files (TXT)
+  - Word documents (DOCX)
+  - CSV files
+  - JSON files
+- Automatic text chunking and processing
+- Efficient document embedding using multilingual E5 model
 
-## 🛠️ Technologies Used
+### Advanced Search Capabilities
+- **Hybrid Search System**:
+  - Semantic search using FAISS vector store
+  - Keyword-based search using BM25
+  - Contextual reranking with GPT-4o-mini
+- **Web Search Integration**:
+  - Real-time web search using Tavily API
+  - Configurable search depth and time range
+  - Domain filtering and exclusion
+  - AI-generated summaries of web results
 
-- **Frontend**: Streamlit
-- **Language Model**: Qwen2.5-3B-Instruct
-- **Embeddings**: Sentence-Transformers (all-mpnet-base-v2)
-- **Vector Search**: FAISS
-- **PDF Processing**: PyPDF2
-- **GPU Support**: CUDA
+### Chat Interface
+- Interactive chat interface with document context
+- Conversation memory and history
+- Source document citations
+- Support for multiple languages
 
-## 📋 Requirements
+### Performance Optimization
+- Batch processing for embeddings
+- Performance mode for large documents
+- Configurable batch sizes
+- Efficient memory management
 
-- Python 3.10+
-- CUDA-compatible GPU (recommended)
-- 8GB+ RAM
-- 6GB+ GPU VRAM
+## 🚀 Getting Started
 
-## 🛠️ Instalation 
+### Prerequisites
+- Python 3.8 or higher
+- pip (Python package installer)
 
-- Clone the repository:
-  
-```
-   git clone https://github.com/LAICEROO/AI_RAG_Streamlit.git
-```
-  
-- Install dependencies
-  
-```
-   pip install -r requirements.txt
-```
+### Installation
 
-- Run the application:
-
-```
-   streamlit run app.py
-```
-
-- Access the application: Open the displayed URL in your web browser (e.g., http://localhost:8501).
-
-## 💻 Usage
-
-1. **Upload PDFs**:
-  - Use the sidebar to upload one or more PDF documents.
-  - The application processes the documents and indexes their content for retrieval.
-
-2. **Ask Questions**:
-  - Type your question in the text input field in the main interface.
-  - Click the Ask button to retrieve an answer based on the uploaded PDFs.
-
-3. **Review Chat History**:
-  - The interface displays a history of your queries and the assistant's responses.
-
-4. **Manage Files and History**:
-  - Use the sidebar to view uploaded files and clear chat history if needed.
-
-## 🔍 How It Works
-
-1. **Document Processing**:
-   - PDFs are uploaded and text is extracted
-   - Text is split into manageable chunks
-   - Chunks are converted to embeddings using Sentence-Transformers
-
-2. **Question Answering**:
-   - User question is converted to embedding
-   - Most relevant document chunks are retrieved using FAISS
-   - Context is provided to Qwen model for answer generation
-
-3. **Response Generation**:
-   - Model generates response based on context and question
-   - Response is displayed in chat interface
-   - Chat history is maintained for context
-
-## 🎯 Features in Detail
-
-- **Semantic Search**: Uses FAISS for efficient similarity search in high-dimensional space
-- **Context Window**: Maintains optimal context size for better responses
-- **History Management**: Keeps track of recent conversations
-- **GPU Acceleration**: Utilizes CUDA for faster processing
-- **Memory Management**: Efficient handling of large documents
-- **Error Handling**: Robust error handling for various edge cases
-
-## 🔧 Configuration
-
-Key parameters can be adjusted in the code:
-- `max_length`: Maximum context length (default: 2048)
-- `top_k`: Number of relevant chunks to retrieve (default: 5)
-- `temperature`: Response randomness (default: 0.7)
-- `chunk_size`: Size of text chunks (default: 500)
-
-## 📝 Note
-This application runs completely locally:
-- No API keys required
-- No internet connection needed after initial model download
-- All processing is done on your local machine
-- Your documents never leave your computer
-
-# Chat with PDFs Application
-
-This application allows you to upload multiple PDF documents and ask questions about their content. It uses:
-
-- Qwen/QwQ-32B for generating responses via Hugging Face's Inference API
-- multilingual-e5-large-instruct for creating embeddings of your documents
-
-## Installation
-
-### 1. Clone the repository
+1. Clone the repository:
 ```bash
-git clone <your-repo-url>
-cd <repo-directory>
+git clone https://github.com/yourusername/ai-rag-streamlit.git
+cd ai-rag-streamlit
 ```
 
-### 2. Create a virtual environment
+2. Create and activate a virtual environment (recommended):
 ```bash
 python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-### 3. Activate the virtual environment
-
-#### Windows:
-```bash
-venv\Scripts\activate
-```
-
-#### macOS/Linux:
-```bash
-source venv/bin/activate
-```
-
-### 4. Install dependencies
+3. Install required packages:
 ```bash
 pip install -r requirements.txt
 ```
 
-### 5. Install PyTorch with CUDA support (if available)
-For Windows with CUDA:
+4. Set up environment variables:
+Create a `.env` file in the project root with the following variables:
+```env
+OPENAI_API_KEY=your_openai_api_key
+MISTRAL_API_KEY=your_mistral_api_key
+TAVILY_API_KEY=your_tavily_api_key
+```
+
+### Running the Application
+
+1. Start the Streamlit app:
 ```bash
-python install_pytorch.py
+streamlit run app.py
 ```
 
-Alternatively, you can manually install PyTorch:
+2. Open your web browser and navigate to the URL shown in the terminal (typically http://localhost:8501)
 
-- **For CUDA support** (if you have a compatible NVIDIA GPU):
-  ```bash
-  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-  ```
+## 🛠️ Configuration
 
-- **For CPU only**:
-  ```bash
-  pip install torch torchvision torchaudio
-  ```
+### Document Processing Settings
+- Adjust chunk sizes and overlap in `utils/embedding_utils.py`
+- Configure text splitting parameters for optimal processing
 
-### 6. Set up environment variables
-Create a `.env` file in the root directory with the following:
+### Search Settings
+- Toggle hybrid search in the sidebar
+- Adjust semantic search weight (0.0-1.0)
+- Enable/disable contextual reranking
+- Configure number of documents to retrieve
 
-```
+### Web Search Settings
+- Enable/disable automatic web search
+- Set search depth (basic/advanced)
+- Configure time range filters
+- Add domain inclusion/exclusion rules
 
-# RAG Chat with PDFs and Web Search
+## 📚 Usage Guide
 
-This application provides a chat interface for interacting with your PDF documents and web search results using Retrieval-Augmented Generation (RAG).
+1. **Document Upload**:
+   - Go to the "Documents" tab in the sidebar
+   - Upload your documents using the file uploader
+   - Click "Process" to start document processing
 
-## Key Features
+2. **Asking Questions**:
+   - Type your question in the chat input
+   - The system will search through your documents and the web (if enabled)
+   - View the response with source citations
 
-- **Chat with multiple PDFs**: Upload and process PDF documents to chat with their content
-- **Web Search Integration**: Enhanced with Tavily web search for real-time information
-- **Advanced RAG System**: Uses a state-of-the-art hybrid retrieval approach
+3. **Web Search**:
+   - Enable web search in the sidebar
+   - Configure search parameters as needed
+   - Results will be automatically integrated into responses
 
-## Hybrid Search System
+4. **Advanced Features**:
+   - Use the "Retrieval Settings" tab to fine-tune search behavior
+   - Access "Advanced Settings" for performance optimization
+   - Enable developer mode for debugging information
 
-This application implements an advanced hybrid search system that combines:
+## 🔧 Technical Details
 
-1. **Semantic Search (FAISS)**: Uses E5 multilingual embeddings to find documents based on meaning
-2. **Keyword Search (BM25)**: Uses traditional keyword-based search for exact matches
-3. **Contextual Reranking (BART)**: Uses BART-large-CNN to rerank retrieved documents based on query context
+### Architecture
+- Frontend: Streamlit
+- Document Processing: LangChain
+- Embeddings: Multilingual E5 model
+- Vector Store: FAISS
+- Search: Hybrid system (FAISS + BM25 + GPT-4o-mini)
+- LLM: Mistral AI
 
-This hybrid approach is based on best practices from:
-- [Anthropic's Contextual Retrieval Research](https://www.anthropic.com/news/contextual-retrieval)
-- [LangChain's BM25 Retriever](https://python.langchain.com/docs/integrations/retrievers/bm25/)
-- [Hybrid Search Best Practices](https://medium.com/etoai/hybrid-search-combining-bm25-and-semantic-search-for-better-results-with-lan-1358038fe7e6)
+### Key Components
+- `app.py`: Main application file
+- `utils/hybrid_search.py`: Hybrid search implementation
+- `utils/embedding_utils.py`: Document processing utilities
 
-## Getting Started
+## 🤝 Contributing
 
-1. Clone this repository
-2. Install requirements:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Create a `.env` file with your API keys:
-   ```
-   MISTRAL_API_KEY=your_mistral_key
-   TAVILY_API_KEY=your_tavily_key
-   HUGGINGFACEHUB_API_TOKEN=your_huggingface_key
-   ```
-4. Run the application:
-   ```
-   streamlit run app.py
-   ```
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-## Usage
+## 📄 License
 
-1. **Upload Documents**: Use the sidebar to upload PDF files
-2. **Process Documents**: Click "Process" to extract and embed the text
-3. **Configure Search**: Adjust the retrieval settings in the sidebar for optimal results
-4. **Chat**: Ask questions about your documents in the chat interface
-
-## Retrieval Settings
-
-- **Hybrid Search**: Toggle to enable/disable the hybrid search system
-- **Semantic Weight**: Adjust the balance between semantic search and BM25 (higher values favor semantic)
-- **Number of Documents**: Control how many documents are retrieved for each query
-- **BART Reranking**: Enable/disable contextual reranking of retrieved documents
-
-## Web Search Integration
-
-- **Enable Web Search**: Toggle to automatically search the web for each question
-- **Search Depth**: Choose between basic (faster) or advanced (more thorough) search
-- **Additional Options**: Control max results, time range, and other search parameters
-
-## Performance Optimization
-
-- **Performance Mode**: Optimizes embedding computation for better performance
-- **Batch Size**: Control the batch size for embedding calculations
+This project is licensed under the MIT License - see the LICENSE file for details.

@@ -1,18 +1,19 @@
 # Core libraries
-streamlit>=1.29.0
+streamlit>=1.31.0
 langchain>=0.1.0
-langchain-community>=0.0.13
+langchain-community>=0.0.10
 langchain-core>=0.1.10
 langchain-text-splitters>=0.0.1
 langchain-huggingface>=0.0.1
 
 # PDF processing
-pypdf2>=3.0.0
+PyPDF2>=3.0.0
 pdfplumber>=0.10.2
 
 # Document processing - new additions
-python-docx>=0.8.11  # For .docx files
-pandas>=2.0.0  # For CSV files
+python-docx>=1.0.0
+pandas>=2.1.0
+numpy>=1.24.0
 
 # Text processing and tokenization
 nltk>=3.8.1
@@ -23,11 +24,11 @@ faiss-cpu>=1.7.4
 
 # Hugging Face integration
 huggingface-hub>=0.19.4
-transformers>=4.45.0
+transformers>=4.36.0
 sentence-transformers>=2.2.2
 
 # PyTorch - use CPU version by default
-torch>=2.0.0
+torch>=2.1.0
 
 # Environment variables
 python-dotenv>=1.0.0
@@ -37,8 +38,8 @@ accelerate>=0.20.0
 
 # API clients
 requests>=2.31.0
-mistralai>=0.0.7
-langchain-mistralai>=0.0.1
+mistralai>=0.0.10
+langchain-mistralai>=0.0.3
 
 # Additional dependencies
 sentencepiece>=0.1.99
